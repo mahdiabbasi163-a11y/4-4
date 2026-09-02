@@ -729,6 +729,20 @@ class AssistantRepository(
                 action = if (status == "accepted") "accept" else status
             )
 
+            // Try 1: If status is accepted, try POST orders/accept
+            if (status == "accepted" || status == "accept") {
+                try {
+                    val acceptReq = com.example.data.model.AcceptOrderApiRequest(
+                        orderId = orderId,
+                        technicianId = technicianId
+                    )
+                    val res = kodyarApiService.acceptOrder(token, acceptReq)
+                    if (res.status == "ok" || res.status == "success" || res.success == true) {
+                        return@withContext res
+                    }
+                } catch (_: Exception) {}
+            }
+
             // Try 1: PUT orders/{id}
             try {
                 val res = kodyarApiService.updateOrderDirectPut(token, orderId, req)
@@ -772,6 +786,24 @@ class AssistantRepository(
             // Try 6: POST technician/orders/update
             try {
                 kodyarApiService.updateOrderStatus(token, req)
+            } catch (e: Exception) {
+                com.example.data.model.KodyarResponse(
+                    status = "error",
+                    error = parseApiError(e)
+                )
+            }
+        }
+
+    suspend fun updateTechnicianStatusApi(token: String, status: String, technicianId: String? = null) =
+        withContext(Dispatchers.IO) {
+            try {
+                kodyarApiService.updateTechnicianStatus(
+                    token = token,
+                    request = com.example.data.model.TechnicianStatusUpdateRequest(
+                        technicianId = technicianId,
+                        status = status
+                    )
+                )
             } catch (e: Exception) {
                 com.example.data.model.KodyarResponse(
                     status = "error",

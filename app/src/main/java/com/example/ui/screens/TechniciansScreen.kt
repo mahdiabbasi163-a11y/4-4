@@ -340,12 +340,22 @@ fun TechniciansScreen(
                                         fontSize = 14.sp,
                                         color = CodyarTextPrimary
                                     )
-                                    Box(
-                                        modifier = Modifier
-                                            .background(Color(0xFFEAFAF1), RoundedCornerShape(5.dp))
-                                            .padding(horizontal = 7.dp, vertical = 2.dp)
-                                    ) {
-                                        Text("✓ تایید شده", color = Color(0xFF1E8449), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    if (tech.resolvedIsVerified) {
+                                        Box(
+                                            modifier = Modifier
+                                                .background(Color(0xFFEAFAF1), RoundedCornerShape(5.dp))
+                                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("✓ تایید شده", color = Color(0xFF1E8449), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .background(Color(0xFFFFF3CD), RoundedCornerShape(5.dp))
+                                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("در انتظار تایید", color = Color(0xFF856404), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
                                     }
                                 }
 

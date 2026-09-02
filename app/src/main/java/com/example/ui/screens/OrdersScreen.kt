@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -39,6 +40,8 @@ fun OrdersScreen(
 ) {
     val partPurchases by viewModel.partPurchases.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
+    val isTechnicianOnline by viewModel.isTechnicianOnline.collectAsState()
+    val isTechStatusUpdating by viewModel.isTechStatusUpdating.collectAsState()
     val isTech = currentUser?.isTechnicianUser == true || (currentUser?.role == "technician" || currentUser?.role == "tech" || currentUser?.role == "repairman")
 
     var selectedSubTab by remember { mutableStateOf(0) } // 0: Repair Orders, 1: Part Purchases
@@ -123,6 +126,81 @@ fun OrdersScreen(
 
         if (selectedSubTab == 0) {
             // Repair Orders Tab
+
+            // Technician Online / Vacation Status Card
+            if (isTech) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = if (isTechnicianOnline) Color(0xFFF0FDF4) else Color(0xFFFEF2F2)),
+                    border = BorderStroke(1.dp, if (isTechnicianOnline) Color(0xFFBBF7D0) else Color(0xFFFECACA)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .background(if (isTechnicianOnline) Color(0xFF16A34A) else Color(0xFFDC2626), CircleShape)
+                            )
+                            Column {
+                                Text(
+                                    text = if (isTechnicianOnline) "وضعیت تکنسین: آماده به کار 🟢" else "وضعیت تکنسین: در حال مرخصی 🏖️",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isTechnicianOnline) Color(0xFF166534) else Color(0xFF991B1B)
+                                )
+                                Text(
+                                    text = if (isTechnicianOnline) "سفارش‌های جدید شهر ${currentUser?.city ?: ""} بلافاصله به شما اعلام می‌شود" else "سفارش جدیدی از منطقه برای شما ارسال نمی‌شود",
+                                    fontSize = 10.sp,
+                                    color = if (isTechnicianOnline) Color(0xFF15803D) else Color(0xFFB91C1C)
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                if (!isTechStatusUpdating) {
+                                    val willBeOnline = !isTechnicianOnline
+                                    viewModel.toggleTechnicianStatus { success, err ->
+                                        if (success) {
+                                            val msg = if (willBeOnline) "وضعیت: آماده به کار و دریافت سفارش ✅" else "وضعیت: مرخصی (عدم دریافت سفارش) 🏖️"
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, err ?: "خطا در تغییر وضعیت", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isTechnicianOnline) Color(0xFFDC2626) else Color(0xFF16A34A)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            if (isTechStatusUpdating) {
+                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = Color.White)
+                            } else {
+                                Text(
+                                    text = if (isTechnicianOnline) "رفتن به مرخصی" else "خروج از مرخصی",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // Commission Debt Alert Banner for Technician
             if (isTech && currentUser?.hasCommissionDebt == true) {
@@ -257,16 +335,16 @@ fun OrdersScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text(if (isTech) "📋" else "🔧", fontSize = 44.sp)
+                    Text(if (isTech) (if (!isTechnicianOnline) "🏖️" else "📋") else "🔧", fontSize = 44.sp)
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = if (isTech) "سفارش تعمیری برای انجام وجود ندارد" else "سفارشی ثبت نشده است",
+                        text = if (isTech) (if (!isTechnicianOnline) "شما در حالت مرخصی هستید" else "سفارش تعمیری برای انجام وجود ندارد") else "سفارشی ثبت نشده است",
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
                         color = CodyarTextPrimary
                     )
                     Text(
-                        text = if (isTech) "سفارش‌های جدید ارجاع شده از طرف مشتریان در این بخش قرار می‌گیرند" else "جهت ثبت درخواست با تکنسین تماس حاصل فرمایید",
+                        text = if (isTech) (if (!isTechnicianOnline) "در زمان مرخصی، سفارش‌های جدید شهر دریافت نمی‌شوند. جهت دریافت سفارش، وضعیت خود را به آماده‌به‌کار تغییر دهید." else "سفارش‌های جدید ارجاع شده از طرف مشتریان در این بخش قرار می‌گیرند") else "جهت ثبت درخواست با تکنسین تماس حاصل فرمایید",
                         fontSize = 13.sp,
                         color = Color.Gray,
                         modifier = Modifier.padding(bottom = 20.dp),
@@ -576,7 +654,7 @@ fun OrdersScreen(
                                                     modifier = Modifier.fillMaxWidth()
                                                 ) {
                                                     Text(
-                                                        text = if (currentUser?.isFirstOrderFree == true) "قبول مسئولیت سفارش (سفارش اول رایگان 🎁)" else "قبول مسئولیت و انجام سفارش 🤝",
+                                                        text = if (currentUser?.isFirstOrderFree == true) "قبول و ثبت به نام من (سفارش اول رایگان 🎁)" else "قبول و ثبت به نام من 🤝",
                                                         fontSize = 12.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         color = Color.White

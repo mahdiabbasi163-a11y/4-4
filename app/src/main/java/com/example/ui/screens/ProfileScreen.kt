@@ -80,10 +80,10 @@ fun ProfileScreen(
             val subObj = currentUser.subscription
             val isPremium = subObj?.is_premium == true || currentUser.is_premium == true || 
                 currentUser.is_vip == true || currentUser.has_subscription == true || 
-                !currentUser.plan.isNullOrBlank() || !subObj?.plan.isNullOrBlank() || !subObj?.plan_name.isNullOrBlank() ||
                 subObj?.status?.let { it.equals("active", true) || it.contains("فعال") || it.startsWith("sub_") } == true ||
                 currentUser.subscription_status?.let { it.equals("active", true) || it.contains("فعال") } == true ||
-                !currentUser.expiry_date.isNullOrBlank() || !subObj?.expiry_date.isNullOrBlank()
+                (!currentUser.plan.isNullOrBlank() && !currentUser.expiry_date.isNullOrBlank()) ||
+                (!subObj?.plan.isNullOrBlank() && !subObj?.expiry_date.isNullOrBlank())
             val rawExpiry = subObj?.expiry_date ?: currentUser.expiry_date ?: currentUser.subscription_expiry ?: currentUser.expires_at ?: subObj?.end_date ?: ""
             val expiry = convertGregorianToJalali(rawExpiry)
 
@@ -202,6 +202,80 @@ fun ProfileScreen(
                                             fontSize = 11.sp,
                                             color = Color(0xFF475569),
                                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (isTech) {
+                        val isTechnicianOnline by viewModel.isTechnicianOnline.collectAsState()
+                        val isTechStatusUpdating by viewModel.isTechStatusUpdating.collectAsState()
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = if (isTechnicianOnline) Color(0xFFF0FDF4) else Color(0xFFFEF2F2)),
+                            border = BorderStroke(1.dp, if (isTechnicianOnline) Color(0xFFBBF7D0) else Color(0xFFFECACA)),
+                            shape = RoundedCornerShape(9.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .background(if (isTechnicianOnline) Color(0xFF16A34A) else Color(0xFFDC2626), CircleShape)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = if (isTechnicianOnline) "وضعیت: آماده به کار (آنلاین)" else "وضعیت: مرخصی (آفلاین)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isTechnicianOnline) Color(0xFF166534) else Color(0xFF991B1B)
+                                        )
+                                        Text(
+                                            text = if (isTechnicianOnline) "سفارش‌های جدید شهر شما به محض ثبت اطلاع‌رسانی می‌شوند" else "سفارش جدیدی برای شما ارسال نخواهد شد",
+                                            fontSize = 10.sp,
+                                            color = if (isTechnicianOnline) Color(0xFF15803D) else Color(0xFFB91C1C)
+                                        )
+                                    }
+                                }
+                                Button(
+                                    onClick = {
+                                        if (!isTechStatusUpdating) {
+                                            viewModel.toggleTechnicianStatus { success, err ->
+                                                if (success) {
+                                                    val msg = if (!isTechnicianOnline) "وضعیت: آماده به کار و دریافت سفارش ✅" else "وضعیت: مرخصی (عدم دریافت سفارش) 🏖️"
+                                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, err ?: "خطا", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isTechnicianOnline) Color(0xFFDC2626) else Color(0xFF16A34A)
+                                    ),
+                                    shape = RoundedCornerShape(6.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(34.dp)
+                                ) {
+                                    if (isTechStatusUpdating) {
+                                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = Color.White)
+                                    } else {
+                                        Text(
+                                            text = if (isTechnicianOnline) "رفتن به مرخصی" else "فعال‌سازی و کار",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
                                         )
                                     }
                                 }

@@ -364,6 +364,18 @@ interface KodyarApiService {
         @Body request: OrderStatusUpdateRequest
     ): KodyarResponse
 
+    @POST("technicians/update")
+    suspend fun updateTechnicianStatus(
+        @Header("Authorization") token: String? = null,
+        @Body request: TechnicianStatusUpdateRequest
+    ): KodyarResponse
+
+    @POST("orders/accept")
+    suspend fun acceptOrder(
+        @Header("Authorization") token: String? = null,
+        @Body request: AcceptOrderApiRequest
+    ): KodyarResponse
+
     @POST("directus-upload")
     suspend fun uploadFile(
         @Body request: UploadFileRequest

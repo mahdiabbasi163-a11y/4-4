@@ -126,6 +126,19 @@ fun AssistantScreen(
     val freeProblemCount by viewModel.freeProblemCount.collectAsState()
 
     val appUpdateNotification by viewModel.appUpdateNotification.collectAsState()
+    val isTechnicianOnline by viewModel.isTechnicianOnline.collectAsState()
+    val isTechStatusUpdating by viewModel.isTechStatusUpdating.collectAsState()
+    val newOrderAlert by viewModel.newOrderAlert.collectAsState()
+
+    val isTechnicianUser = currentUser?.isTechnicianUser == true || (currentUser?.role == "technician" || currentUser?.role == "tech" || currentUser?.role == "repairman")
+
+    LaunchedEffect(isTechnicianUser, isTechnicianOnline) {
+        if (isTechnicianUser && isTechnicianOnline) {
+            viewModel.startOrderPolling()
+        } else {
+            viewModel.stopOrderPolling()
+        }
+    }
 
     LaunchedEffect(showPlansDialog) {
         if (showPlansDialog) {
@@ -214,6 +227,53 @@ fun AssistantScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                if (isTechnicianUser) {
+                                    // Technician Status Toggle Button (آنلاین / مرخصی)
+                                    Surface(
+                                        onClick = {
+                                            if (!isTechStatusUpdating) {
+                                                viewModel.toggleTechnicianStatus { success, err ->
+                                                    if (success) {
+                                                        val msg = if (isTechnicianOnline) "وضعیت: آماده به کار و دریافت سفارش ✅" else "وضعیت: مرخصی (عدم دریافت سفارش) 🏖️"
+                                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, err ?: "خطا در تغییر وضعیت", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isTechnicianOnline) Color(0xFF16A34A) else Color(0xFFDC2626),
+                                        modifier = Modifier.height(36.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            if (isTechStatusUpdating) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(12.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = Color.White
+                                                )
+                                            } else {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .background(Color.White, CircleShape)
+                                                )
+                                            }
+                                            Text(
+                                                text = if (isTechnicianOnline) "آنلاین" else "مرخصی",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+
                                 if (isPremium) {
                                     Box(
                                         modifier = Modifier
@@ -714,6 +774,89 @@ fun AssistantScreen(
                         openBazaarUpdate(context)
                         viewModel.dismissUpdateDialog()
                     }
+                )
+            }
+
+            // --- NEW REPAIR ORDER POPUP ALERT FOR TECHNICIANS ---
+            if (newOrderAlert != null) {
+                val orderAlert = newOrderAlert!!
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissNewOrderAlert() },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                val orderIdToAct = orderAlert.resolvedOrderId.ifBlank { orderAlert.id ?: "" }
+                                viewModel.acceptRepairOrder(orderIdToAct) { success, err ->
+                                    if (success) {
+                                        Toast.makeText(context, "سفارش با موفقیت به شما اختصاص یافت ✅", Toast.LENGTH_SHORT).show()
+                                        viewModel.dismissNewOrderAlert()
+                                        activeTab = "orders"
+                                    } else {
+                                        Toast.makeText(context, err ?: "خطا در قبول سفارش", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("قبول سفارش و شروع کار 🤝", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    },
+                    dismissButton = {
+                        OutlinedButton(
+                            onClick = { viewModel.dismissNewOrderAlert() },
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("بستن", fontSize = 12.sp, color = CodyarNavy)
+                        }
+                    },
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .background(Color(0xFF22C55E), CircleShape)
+                            )
+                            Text(
+                                text = "🔔 اعلام فوری سفارش کار جدید!",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = CodyarNavy
+                            )
+                        }
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "یک سفارش جدید تعمیرات در منطقه شما ثبت شده است:",
+                                fontSize = 13.sp,
+                                color = Color(0xFF334155)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Surface(
+                                color = Color(0xFFF1F5F9),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (!orderAlert.description.isNullOrBlank()) {
+                                        Text(text = "📌 شرح کار: ${orderAlert.description}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = CodyarNavy)
+                                    }
+                                    if (!orderAlert.city.isNullOrBlank()) {
+                                        Text(text = "📍 شهر: ${orderAlert.city}", fontSize = 12.sp, color = Color(0xFF475569))
+                                    }
+                                    if (!orderAlert.customer_name.isNullOrBlank()) {
+                                        Text(text = "👤 مشتری: ${orderAlert.customer_name}", fontSize = 12.sp, color = Color(0xFF475569))
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = Color.White
                 )
             }
 

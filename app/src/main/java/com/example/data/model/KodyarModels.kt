@@ -358,7 +358,8 @@ data class KodyarTechnician(
     val documents: Any? = null,
     val document_images: Any? = null,
     val uploaded_documents: Any? = null,
-    val status: String? = null
+    val status: String? = null,
+    @Json(name = "approval_status") val approval_status: String? = null
 ) {
     val resolvedName: String
         get() = (name ?: full_name ?: "").ifBlank { "تکنسین کدیار" }
@@ -395,7 +396,22 @@ data class KodyarTechnician(
         }
 
     val resolvedIsVerified: Boolean
-        get() = true
+        get() {
+            fun parseBool(input: Any?): Boolean? {
+                if (input == null) return null
+                if (input is Boolean) return input
+                if (input is Number) return input.toInt() == 1
+                val s = input.toString().trim().lowercase()
+                return s == "1" || s == "true" || s == "approved" || s == "verified" || s == "تایید شده"
+            }
+            if (parseBool(is_approved) == true) return true
+            val appStat = (approval_status ?: "").trim().lowercase()
+            if (appStat == "approved" || appStat == "verified" || appStat == "تایید شده") return true
+            val mainStat = (status ?: "").trim().lowercase()
+            if (mainStat == "approved" || mainStat == "verified" || mainStat == "تایید شده") return true
+            if (parseBool(isVerified) == true || parseBool(is_verified) == true) return true
+            return false
+        }
 
     val resolvedAvatarUrl: String?
         get() {
@@ -462,8 +478,8 @@ data class KodyarUser(
     val categories: List<String>? = null,
     @Json(name = "specialty") val specialty: List<String>? = null,
     val district: String? = null,
-    val is_approved: Boolean? = true,
-    val approval_status: String? = "approved",
+    val is_approved: Boolean? = null,
+    val approval_status: String? = null,
     val uploaded_documents: List<String>? = null,
     val status: String? = null,
     val is_verified: Boolean? = null,
@@ -497,10 +513,20 @@ data class KodyarUser(
     val isApprovedUser: Boolean
         get() {
             if (role != "technician" && role != "tech" && role != "repairman") return true
-            if (is_approved == true || is_verified == true || isVerified == true) return true
-            val stat = (status ?: approval_status ?: "").trim().lowercase()
-            if (stat == "rejected" || is_approved == false) return false
-            return true
+            // Technicians MUST be explicitly approved by admin in database
+            fun parseBool(input: Any?): Boolean? {
+                if (input == null) return null
+                if (input is Boolean) return input
+                if (input is Number) return input.toInt() == 1
+                val s = input.toString().trim().lowercase()
+                return s == "1" || s == "true" || s == "approved" || s == "verified" || s == "تایید شده"
+            }
+            if (parseBool(is_approved) == true) return true
+            val appStat = (approval_status ?: "").trim().lowercase()
+            if (appStat == "approved" || appStat == "verified" || appStat == "تایید شده") return true
+            val mainStat = (status ?: "").trim().lowercase()
+            if (mainStat == "approved" || mainStat == "verified" || mainStat == "تایید شده") return true
+            return false
         }
 
     val isTechnicianUser: Boolean
@@ -642,6 +668,9 @@ data class KodyarRepairOrder(
     val shamsi_date: String? = null,
     val shamsiDate: String? = null
 ) {
+    val resolvedOrderId: String
+        get() = listOfNotNull(order_id, orderId, id, tracking_code, trackingCode).firstOrNull { it.isNotBlank() } ?: ""
+
     val resolvedCustomerName: String
         get() = listOfNotNull(customer_name, customerName, user_name).firstOrNull { it.isNotBlank() } ?: ""
 
@@ -958,6 +987,24 @@ data class CreateTicketRequest(
 data class SendReplyRequest(
     val message: String
 )
+
+@JsonClass(generateAdapter = true)
+data class TechnicianStatusUpdateRequest(
+    val technicianId: String? = null,
+    @Json(name = "technician_id") val technician_id: String? = technicianId,
+    val status: String // "active" or "vacation"
+)
+
+@JsonClass(generateAdapter = true)
+data class AcceptOrderApiRequest(
+    val orderId: String? = null,
+    @Json(name = "order_id") val order_id: String? = orderId,
+    val technicianId: String? = null,
+    @Json(name = "technician_id") val technician_id: String? = technicianId,
+    val technicianPhone: String? = null,
+    @Json(name = "technician_phone") val technician_phone: String? = technicianPhone
+)
+
 
 
 

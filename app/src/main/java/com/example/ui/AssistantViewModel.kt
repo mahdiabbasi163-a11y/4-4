@@ -197,6 +197,106 @@ class AssistantViewModel(
     private val _isDisclaimerAccepted = MutableStateFlow(sharedPrefs.getBoolean("disclaimer_accepted", false))
     val isDisclaimerAccepted: StateFlow<Boolean> = _isDisclaimerAccepted.asStateFlow()
 
+    // --- Technician Online / Vacation Status ---
+    private val _isTechnicianOnline = MutableStateFlow(sharedPrefs.getBoolean("technician_online_status", true))
+    val isTechnicianOnline: StateFlow<Boolean> = _isTechnicianOnline.asStateFlow()
+    private val _isTechStatusUpdating = MutableStateFlow(false)
+    val isTechStatusUpdating: StateFlow<Boolean> = _isTechStatusUpdating.asStateFlow()
+
+    private fun getLocalOrderStatusOverrides(): Map<String, String> {
+        val json = sharedPrefs.getString("local_order_status_overrides", null) ?: return emptyMap()
+        return try {
+            val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+            moshi.adapter<Map<String, String>>(type).fromJson(json) ?: emptyMap()
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun saveLocalOrderStatusOverride(orderId: String, status: String) {
+        if (orderId.isBlank()) return
+        val current = getLocalOrderStatusOverrides().toMutableMap()
+        current[orderId] = status
+        try {
+            val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+            val json = moshi.adapter<Map<String, String>>(type).toJson(current)
+            sharedPrefs.edit().putString("local_order_status_overrides", json).apply()
+        } catch (e: Exception) {
+            Log.e("AssistantViewModel", "Error saving local order override", e)
+        }
+    }
+
+    // --- New Order Popup Alert for Active Technicians ---
+    private val _newOrderAlert = MutableStateFlow<KodyarRepairOrder?>(null)
+    val newOrderAlert: StateFlow<KodyarRepairOrder?> = _newOrderAlert.asStateFlow()
+    private val knownOrderIds = mutableSetOf<String>()
+    private var hasInitializedOrderIds = false
+    private var orderPollingJob: kotlinx.coroutines.Job? = null
+
+    fun dismissNewOrderAlert() {
+        _newOrderAlert.value = null
+    }
+
+    fun playOrderAlertSound() {
+        try {
+            val alertTone = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = android.media.RingtoneManager.getRingtone(context, alertTone)
+            ringtone?.play()
+        } catch (e: Exception) {
+            Log.e("AssistantViewModel", "Error playing notification alert sound", e)
+        }
+    }
+
+    fun toggleTechnicianStatus(onResult: (Boolean, String?) -> Unit) {
+        val token = getSessionToken()
+        val newStatus = !_isTechnicianOnline.value
+        val statusString = if (newStatus) "active" else "vacation"
+
+        _isTechStatusUpdating.value = true
+        _isTechnicianOnline.value = newStatus
+        sharedPrefs.edit().putBoolean("technician_online_status", newStatus).apply()
+
+        // Instantly refresh orders to filter out or bring back regional unassigned orders
+        loadRepairs(silent = true)
+
+        if (token.isNullOrBlank()) {
+            _isTechStatusUpdating.value = false
+            onResult(true, null)
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val techId = _currentUser.value?.id
+                repository.updateTechnicianStatusApi(token, statusString, techId)
+            } catch (e: Exception) {
+                Log.e("AssistantViewModel", "Error updating technician status on server", e)
+            } finally {
+                _isTechStatusUpdating.value = false
+                onResult(true, null)
+            }
+        }
+    }
+
+    fun startOrderPolling() {
+        if (orderPollingJob?.isActive == true) return
+        orderPollingJob = viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(5000)
+                val user = _currentUser.value
+                val isTech = user?.isTechnicianUser == true || user?.role == "technician" || user?.role == "tech" || user?.role == "repairman"
+                if (isTech && _isTechnicianOnline.value && getSessionToken() != null) {
+                    loadRepairs(silent = true)
+                }
+            }
+        }
+    }
+
+    fun stopOrderPolling() {
+        orderPollingJob?.cancel()
+        orderPollingJob = null
+    }
+
     fun acceptDisclaimer() {
         _isDisclaimerAccepted.value = true
         val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
@@ -386,7 +486,7 @@ class AssistantViewModel(
     private val _liveCitiesStructured = MutableStateFlow<List<KodyarCity>>(emptyList())
     val liveCitiesStructured: StateFlow<List<KodyarCity>> = _liveCitiesStructured.asStateFlow()
 
-    private val _isDatabaseLoading = MutableStateFlow(!sharedPrefs.contains("cached_kodyar_database"))
+    private val _isDatabaseLoading = MutableStateFlow(false)
     val isDatabaseLoading: StateFlow<Boolean> = _isDatabaseLoading.asStateFlow()
 
     private val _isTechniciansLoading = MutableStateFlow(false)
@@ -787,8 +887,13 @@ class AssistantViewModel(
         val finalCity = if (userCity.isNotBlank()) userCity else (cached?.resolvedCity ?: persistentCity)
         val finalRole = if (!user.role.isNullOrBlank()) user.role else (cached?.role ?: "customer")
         val finalCategories = if (!user.categories.isNullOrEmpty()) user.categories else cached?.categories
-        val finalIsApproved = user.isApprovedUser || (cached?.isApprovedUser ?: false)
-        val finalApprovalStatus = if (finalIsApproved) "approved" else (user.approval_status ?: (cached?.approval_status ?: "pending"))
+        val isTechUser = finalRole == "technician" || finalRole == "tech" || finalRole == "repairman"
+        val finalIsApproved = if (isTechUser) user.isApprovedUser else true
+        val finalApprovalStatus = if (isTechUser) {
+            if (finalIsApproved) "approved" else (user.approval_status ?: "pending")
+        } else {
+            "approved"
+        }
 
         val editor = sharedPrefs.edit()
             .putString("cached_user_id", user.id)
@@ -875,12 +980,18 @@ class AssistantViewModel(
         val phone = sharedPrefs.getString("cached_user_phone", "") ?: ""
         val isPremium = sharedPrefs.getBoolean("cached_user_premium", false)
         val expiry = sharedPrefs.getString("cached_user_expiry", null)
-        val role = sharedPrefs.getString("cached_user_role", "customer")
+        val role = sharedPrefs.getString("cached_user_role", "customer") ?: "customer"
         val city = sharedPrefs.getString("cached_user_city", null)
         val catsString = sharedPrefs.getString("cached_user_categories", null)
         val categories = if (!catsString.isNullOrEmpty()) catsString.split(",") else null
-        val isApproved = sharedPrefs.getBoolean("cached_user_is_approved", true)
-        val approvalStatus = sharedPrefs.getString("cached_user_approval_status", "approved") ?: "approved"
+        val isTechUser = role == "technician" || role == "tech" || role == "repairman"
+        val isApproved = if (isTechUser) {
+            sharedPrefs.getBoolean("cached_user_is_approved", false)
+        } else {
+            true
+        }
+        val defaultApprovalStatus = if (isTechUser) "pending" else "approved"
+        val approvalStatus = sharedPrefs.getString("cached_user_approval_status", defaultApprovalStatus) ?: defaultApprovalStatus
         return KodyarUser(
             id = id,
             full_name = name,
@@ -889,11 +1000,11 @@ class AssistantViewModel(
             role = role,
             city = city,
             categories = categories,
-            is_approved = isApproved,
-            approval_status = approvalStatus,
-            is_verified = isApproved,
-            isVerified = isApproved,
-            status = if (isApproved) "verified" else "pending"
+            is_approved = if (isTechUser) isApproved else true,
+            approval_status = if (isTechUser) (if (isApproved) "approved" else "pending") else "approved",
+            is_verified = true,
+            isVerified = true,
+            status = if (isTechUser) (if (isApproved) "approved" else "pending") else "active"
         )
     }
 
@@ -935,7 +1046,7 @@ class AssistantViewModel(
     private fun isPositiveSubString(str: String?): Boolean {
         if (str.isNullOrBlank()) return false
         val s = str.trim().lowercase()
-        return s == "active" || s == "فعال" || s == "true" || s == "1" || s == "valid" || s == "completed" || s == "موفق" || s.startsWith("sub_") || s.contains("ماه") || s.contains("خطا")
+        return s == "active" || s == "فعال" || s == "true" || s == "1" || s == "valid" || s == "completed" || s == "موفق" || s.startsWith("sub_") || s.contains("ماه")
     }
 
     private fun extractSubscription(
@@ -948,14 +1059,14 @@ class AssistantViewModel(
             val dSub = dedicatedSub.subscription
             val dIsPrem = dedicatedSub.is_premium == true || dedicatedSub.is_active == true || dedicatedSub.isActive == true ||
                     dSub?.is_premium == true || dSub?.is_active == true || dSub?.isActive == true || dSub?.active == true ||
-                    isPositiveSubString(dSub?.status) || isPositiveSubString(dedicatedSub.status) ||
-                    !dSub?.plan.isNullOrBlank() || !dSub?.plan_name.isNullOrBlank()
+                    isPositiveSubString(dSub?.status) || isPositiveSubString(dedicatedSub.status)
             val dExp = dedicatedSub.expiry_date ?: dedicatedSub.expires_at ?: dSub?.expiry_date ?: dSub?.expiryDate ?: dSub?.expires_at ?: dSub?.expire_at ?: dSub?.end_date ?: dSub?.subscription_expiry
-            if (dIsPrem || !dExp.isNullOrBlank()) {
+            val dPlan = dSub?.plan ?: dSub?.plan_name ?: dedicatedSub.user?.plan
+            if (dIsPrem || (!dExp.isNullOrBlank() && !dPlan.isNullOrBlank())) {
                 return KodyarSubscription(
                     is_premium = true,
                     expiry_date = dExp,
-                    plan = dSub?.plan ?: dSub?.plan_name ?: dedicatedSub.user?.plan,
+                    plan = dPlan,
                     plan_name = dSub?.plan_name ?: dSub?.plan
                 )
             }
@@ -965,20 +1076,22 @@ class AssistantViewModel(
         val uSub = user?.subscription
         if (uSub != null) {
             val isPrem = uSub.is_premium || uSub.is_active == true || uSub.isActive == true || uSub.active == true ||
-                    isPositiveSubString(uSub.status) || !uSub.plan.isNullOrBlank() || !uSub.plan_name.isNullOrBlank()
+                    isPositiveSubString(uSub.status)
             val exp = uSub.expiry_date ?: uSub.expiryDate ?: uSub.expires_at ?: uSub.expire_at ?: uSub.end_date ?: uSub.subscription_expiry
-            if (isPrem || !exp.isNullOrBlank()) {
-                return uSub.copy(is_premium = true, expiry_date = exp)
+            val plan = uSub.plan ?: uSub.plan_name
+            if (isPrem || (!exp.isNullOrBlank() && !plan.isNullOrBlank())) {
+                return uSub.copy(is_premium = true, expiry_date = exp, plan = plan, plan_name = uSub.plan_name ?: plan)
             }
         }
 
         // 3. Check response.subscription
         if (responseSub != null) {
             val isPrem = responseSub.is_premium || responseSub.is_active == true || responseSub.isActive == true || responseSub.active == true ||
-                    isPositiveSubString(responseSub.status) || !responseSub.plan.isNullOrBlank() || !responseSub.plan_name.isNullOrBlank()
+                    isPositiveSubString(responseSub.status)
             val exp = responseSub.expiry_date ?: responseSub.expiryDate ?: responseSub.expires_at ?: responseSub.expire_at ?: responseSub.end_date ?: responseSub.subscription_expiry
-            if (isPrem || !exp.isNullOrBlank()) {
-                return responseSub.copy(is_premium = true, expiry_date = exp)
+            val plan = responseSub.plan ?: responseSub.plan_name
+            if (isPrem || (!exp.isNullOrBlank() && !plan.isNullOrBlank())) {
+                return responseSub.copy(is_premium = true, expiry_date = exp, plan = plan, plan_name = responseSub.plan_name ?: plan)
             }
         }
 
@@ -986,14 +1099,14 @@ class AssistantViewModel(
         if (user != null) {
             val userIsPrem = user.is_premium == true || user.is_active == true || user.isActive == true || 
                     user.is_vip == true || user.vip == true || user.has_subscription == true || user.hasSubscription == true ||
-                    isPositiveSubString(user.subscription_status) || isPositiveSubString(user.status) ||
-                    !user.plan.isNullOrBlank() || !user.plan_name.isNullOrBlank()
+                    isPositiveSubString(user.subscription_status)
             val userExp = user.expiry_date ?: user.expiryDate ?: user.subscription_expiry ?: user.expires_at ?: user.expire_at ?: user.end_date
-            if (userIsPrem || !userExp.isNullOrBlank()) {
+            val userPlan = user.plan ?: user.plan_name
+            if (userIsPrem || (!userExp.isNullOrBlank() && !userPlan.isNullOrBlank())) {
                 return KodyarSubscription(
                     is_premium = true,
                     expiry_date = userExp,
-                    plan = user.plan ?: user.plan_name,
+                    plan = userPlan,
                     plan_name = user.plan_name ?: user.plan
                 )
             }
@@ -1017,20 +1130,18 @@ class AssistantViewModel(
                     val cached = getCachedUser()
                     val persistentCity = if (!response.user.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${response.user.phone}", null) else null
                     val sub = extractSubscription(response.user, response.subscription, subStatusRes)
-                    val isApprovedFromTechs = _liveTechnicians.value.any { 
-                        (it.id == response.user.id || (!it.name.isNullOrBlank() && it.name == response.user.full_name)) && it.isVerified == true 
-                    }
-                    val isApproved = response.user.isApprovedUser || isApprovedFromTechs
+                    val isTech = response.user.role == "technician" || response.user.role == "tech" || response.user.role == "repairman"
+                    val isApproved = if (isTech) response.user.isApprovedUser else true
                     val mergedUser = response.user.copy(
                         subscription = sub,
                         city = if (!response.user.resolvedCity.isNullOrBlank()) response.user.resolvedCity else (cached?.resolvedCity ?: persistentCity),
                         role = if (!response.user.role.isNullOrBlank()) response.user.role else (cached?.role ?: "customer"),
                         categories = if (!response.user.categories.isNullOrEmpty()) response.user.categories else cached?.categories,
-                        is_approved = isApproved,
-                        approval_status = if (isApproved) "approved" else "pending",
-                        is_verified = isApproved,
-                        isVerified = isApproved,
-                        status = if (isApproved) "verified" else (response.user.status ?: "pending")
+                        is_approved = if (isTech) isApproved else true,
+                        approval_status = if (isTech) (if (isApproved) "approved" else "pending") else "approved",
+                        is_verified = response.user.is_verified ?: true,
+                        isVerified = response.user.isVerified ?: true,
+                        status = if (isTech) (if (isApproved) "approved" else "pending") else (response.user.status ?: "active")
                     )
                     _currentUser.value = mergedUser
                     saveUserToCache(mergedUser)
@@ -1078,16 +1189,11 @@ class AssistantViewModel(
                     val cached = getCachedUser()
                     val persistentCity = if (!response.user.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${response.user.phone}", null) else null
                     val sub = extractSubscription(response.user, response.subscription)
-                    val matchedTech = _liveTechnicians.value.find { tech ->
-                        tech.id == response.user.id || 
-                        (!tech.name.isNullOrBlank() && tech.name == response.user.full_name)
-                    }
-                    val isApprovedFromTechs = matchedTech?.isVerified == true
-                    val isApproved = response.user.isApprovedUser || isApprovedFromTechs
-                    val isTech = response.user.role == "technician" || matchedTech != null
+                    val isTech = response.user.role == "technician" || response.user.role == "tech" || response.user.role == "repairman"
+                    val isApproved = if (isTech) response.user.isApprovedUser else true
                     val finalRole = if (isTech) "technician" else if (!response.user.role.isNullOrBlank()) response.user.role else (cached?.role ?: "customer")
                     val userCats = if (!response.user.categories.isNullOrEmpty()) response.user.categories else response.user.specialty
-                    val finalCategories = if (!userCats.isNullOrEmpty()) userCats else (matchedTech?.resolvedCategories ?: cached?.categories)
+                    val finalCategories = if (!userCats.isNullOrEmpty()) userCats else cached?.categories
 
                     val mergedUser = response.user.copy(
                         subscription = sub,
@@ -1095,11 +1201,11 @@ class AssistantViewModel(
                         city = if (!response.user.resolvedCity.isNullOrBlank()) response.user.resolvedCity else (cached?.resolvedCity ?: persistentCity),
                         role = finalRole,
                         categories = finalCategories,
-                        is_approved = isApproved,
-                        approval_status = if (isApproved) "approved" else "pending",
-                        is_verified = isApproved,
-                        isVerified = isApproved,
-                        status = if (isApproved) "verified" else (response.user.status ?: "pending")
+                        is_approved = if (isTech) isApproved else true,
+                        approval_status = if (isTech) (if (isApproved) "approved" else "pending") else "approved",
+                        is_verified = response.user.is_verified ?: true,
+                        isVerified = response.user.isVerified ?: true,
+                        status = if (isTech) (if (isApproved) "approved" else "pending") else (response.user.status ?: "active")
                     )
                     val tokenToSave = response.token ?: response.session_token ?: response.user.id
                     _currentUser.value = mergedUser
@@ -1128,6 +1234,7 @@ class AssistantViewModel(
                             ?: sharedPrefs.getString("local_user_cats_${cleanPhone.removePrefix("0")}", null)
                         val savedCats = if (!savedCatsStr.isNullOrEmpty()) savedCatsStr.split(",") else null
 
+                        val isTechUser = savedRole == "technician"
                         val localUser = KodyarUser(
                             id = "user_${cleanPhone}",
                             full_name = savedName ?: "کاربر کدیار",
@@ -1135,10 +1242,10 @@ class AssistantViewModel(
                             role = savedRole ?: "customer",
                             city = savedCity,
                             categories = savedCats,
-                            is_approved = true,
-                            approval_status = "approved",
-                            is_verified = true,
-                            isVerified = true
+                            is_approved = if (isTechUser) false else true,
+                            approval_status = if (isTechUser) "pending" else "approved",
+                            is_verified = if (isTechUser) false else true,
+                            isVerified = if (isTechUser) false else true
                         )
                         _currentUser.value = localUser
                         saveUserToCache(localUser)
@@ -1166,6 +1273,7 @@ class AssistantViewModel(
                         ?: sharedPrefs.getString("local_user_cats_${cleanPhone.removePrefix("0")}", null)
                     val savedCats = if (!savedCatsStr.isNullOrEmpty()) savedCatsStr.split(",") else null
 
+                    val isTechUser = savedRole == "technician"
                     val localUser = KodyarUser(
                         id = "user_${cleanPhone}",
                         full_name = savedName ?: "کاربر کدیار",
@@ -1173,10 +1281,10 @@ class AssistantViewModel(
                         role = savedRole ?: "customer",
                         city = savedCity,
                         categories = savedCats,
-                        is_approved = true,
-                        approval_status = "approved",
-                        is_verified = true,
-                        isVerified = true
+                        is_approved = if (isTechUser) false else true,
+                        approval_status = if (isTechUser) "pending" else "approved",
+                        is_verified = if (isTechUser) false else true,
+                        isVerified = if (isTechUser) false else true
                     )
                     _currentUser.value = localUser
                     saveUserToCache(localUser)
@@ -1288,13 +1396,23 @@ class AssistantViewModel(
                 val res = repository.verifyOtp(cleanPhone, cleanCode, newPassword = newPassword)
                 if (res.status == "ok" || res.status == "success" || res.success == true) {
                     if (res.user != null || !res.token.isNullOrBlank() || !res.session_token.isNullOrBlank()) {
-                        val user = res.user?.copy(phone = cleanPhone, is_verified = true, isVerified = true) ?: KodyarUser(
+                        val isTech = res.user?.role == "technician" || res.user?.role == "tech" || res.user?.role == "repairman"
+                        val isApproved = if (isTech) res.user?.isApprovedUser == true else true
+                        val user = res.user?.copy(
+                            phone = cleanPhone,
+                            is_verified = true,
+                            isVerified = true,
+                            is_approved = if (isTech) isApproved else true,
+                            approval_status = if (isTech) (if (isApproved) "approved" else "pending") else "approved"
+                        ) ?: KodyarUser(
                             id = "user_${cleanPhone}",
                             full_name = "کاربر کدیار",
                             phone = cleanPhone,
                             role = "customer",
                             is_verified = true,
-                            isVerified = true
+                            isVerified = true,
+                            is_approved = true,
+                            approval_status = "approved"
                         )
                         _currentUser.value = user
                         saveUserToCache(user)
@@ -1442,24 +1560,16 @@ class AssistantViewModel(
         val token = getSessionToken()
         val user = _currentUser.value
         if (token.isNullOrBlank()) {
-            val approved = user?.isApprovedUser == true ||
-                _liveTechnicians.value.any { (it.id == user?.id || (!it.name.isNullOrBlank() && it.name == user?.full_name)) && it.isVerified == true }
-            onResult(approved, if (approved) "حساب شما تایید شده است." else "اطلاعات نشست کاربری یافت نشد. لطفاً مجدداً وارد شوید.")
+            val approved = user?.isApprovedUser == true
+            onResult(approved, if (approved) "✅ حساب شما تایید شده است." else "⏳ حساب شما هنوز در انتظار تایید مدیریت کدیار است.")
             return
         }
         viewModelScope.launch {
             try {
                 val response = repository.getMe(token)
-                val dbResponse = try { repository.getKodyarDatabase() } catch (e: Exception) { null }
-                val serverTechs = dbResponse?.technicians ?: _liveTechnicians.value
-                if (dbResponse?.technicians != null) {
-                    _liveTechnicians.value = dbResponse.technicians
-                }
-
                 if ((response.status == "ok" || response.status == "success") && response.user != null) {
                     val serverUser = response.user
-                    val isApprovedOnServer = serverUser.isApprovedUser ||
-                        serverTechs.any { (it.id == serverUser.id || (!it.name.isNullOrBlank() && it.name == serverUser.full_name)) && it.isVerified == true }
+                    val isApprovedOnServer = serverUser.isApprovedUser
                     val sub = extractSubscription(serverUser, response.subscription)
                     val cached = getCachedUser()
                     val persistentCity = if (!serverUser.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${serverUser.phone}", null) else null
@@ -1471,9 +1581,9 @@ class AssistantViewModel(
                         categories = if (!serverUser.categories.isNullOrEmpty()) serverUser.categories else cached?.categories,
                         is_approved = isApprovedOnServer,
                         approval_status = if (isApprovedOnServer) "approved" else "pending",
-                        is_verified = isApprovedOnServer,
-                        isVerified = isApprovedOnServer,
-                        status = if (isApprovedOnServer) "verified" else (serverUser.status ?: "pending")
+                        is_verified = serverUser.is_verified ?: true,
+                        isVerified = serverUser.isVerified ?: true,
+                        status = if (isApprovedOnServer) "approved" else (serverUser.status ?: "pending")
                     )
                     _currentUser.value = updatedUser
                     saveUserToCache(updatedUser)
@@ -1481,39 +1591,15 @@ class AssistantViewModel(
                     if (isApprovedOnServer) {
                         onResult(true, "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است.")
                     } else {
-                        onResult(false, "⏳ حساب شما هنوز توسط مدیریت سایت ممیزی و تایید نشده است. لطفاً منتظر بمانید.")
+                        onResult(false, "⏳ مدارک و حساب شما هنوز توسط مدیریت سایت کدیار تایید نشده است. لطفاً منتظر بمانید.")
                     }
                 } else {
-                    val approved = user?.isApprovedUser == true ||
-                        serverTechs.any { (it.id == user?.id || (!it.name.isNullOrBlank() && it.name == user?.full_name)) && it.isVerified == true }
-                    if (approved && user != null) {
-                        val updated = user.copy(
-                            is_approved = true,
-                            approval_status = "approved",
-                            is_verified = true,
-                            isVerified = true,
-                            status = "verified"
-                        )
-                        _currentUser.value = updated
-                        saveUserToCache(updated)
-                    }
-                    onResult(approved, if (approved) "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است." else "امکان استعلام وضعیت از سرور وجود نداشت. وضعیت فعلی: ${if (approved) "تایید شده" else "در انتظار تایید"}")
+                    val approved = user?.isApprovedUser == true
+                    onResult(approved, if (approved) "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است." else "⏳ وضعیت حساب شما در انتظار تایید مدیریت است.")
                 }
             } catch (e: Exception) {
-                val approved = user?.isApprovedUser == true ||
-                    _liveTechnicians.value.any { (it.id == user?.id || (!it.name.isNullOrBlank() && it.name == user?.full_name)) && it.isVerified == true }
-                if (approved && user != null) {
-                    val updated = user.copy(
-                        is_approved = true,
-                        approval_status = "approved",
-                        is_verified = true,
-                        isVerified = true,
-                        status = "verified"
-                    )
-                    _currentUser.value = updated
-                    saveUserToCache(updated)
-                }
-                onResult(approved, if (approved) "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است." else "خطا در اتصال به سرور: ${e.message}")
+                val approved = user?.isApprovedUser == true
+                onResult(approved, if (approved) "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است." else "⏳ وضعیت حساب شما در انتظار تایید مدیریت است.")
             }
         }
     }
@@ -1599,21 +1685,6 @@ class AssistantViewModel(
                     }
                 } catch (_: Exception) {}
 
-                val currentTechUser = _currentUser.value
-                if (currentTechUser != null && currentTechUser.role == "technician" && currentTechUser.isApprovedUser != true) {
-                    val matchedTech = _liveTechnicians.value.find { it.id == currentTechUser.id || (!it.name.isNullOrBlank() && it.name == currentTechUser.full_name) }
-                    if (matchedTech?.resolvedIsVerified == true) {
-                        val updatedTech = currentTechUser.copy(
-                            is_approved = true,
-                            approval_status = "approved",
-                            is_verified = true,
-                            isVerified = true,
-                            status = "verified"
-                        )
-                        _currentUser.value = updatedTech
-                        saveUserToCache(updatedTech)
-                    }
-                }
                 _liveCommonProblems.value = response.resolvedCommonProblems
 
                 val dynamicCats = (response.resolvedCategoriesList + response.resolvedErrorCodes.mapNotNull { it.resolvedCategory }).filter { it.isNotBlank() }.distinct()
@@ -2470,10 +2541,12 @@ class AssistantViewModel(
     }
 
     // --- Repair Orders ---
-    fun loadRepairs() {
+    fun loadRepairs(silent: Boolean = false) {
         val token = getSessionToken() ?: return
         viewModelScope.launch {
-            _isRepairsLoading.value = true
+            if (!silent) {
+                _isRepairsLoading.value = true
+            }
             try {
                 val user = _currentUser.value
                 val resp = repository.getRepairs(token)
@@ -2488,26 +2561,70 @@ class AssistantViewModel(
                 val rawPurchases = allOrders.filter { isPartPurchase(it) }
 
                 // 1. Repair orders
-                val filtered = if (user != null && user.role == "technician") {
-                    rawRepairs.filter { order ->
-                        val isAssignedToMe = (order.technician_id != null && order.technician_id == user.id) ||
-                                (!order.technician_name.isNullOrBlank() && user.full_name != null && order.technician_name == user.full_name) ||
+                val isTech = user != null && (user.role == "technician" || user.role == "tech" || user.role == "repairman" || user.isTechnicianUser)
+                val isApprovedTech = isTech && user?.isApprovedUser == true
+                val isOnline = _isTechnicianOnline.value
+                val localOverrides = getLocalOrderStatusOverrides()
+
+                val filtered = if (isTech) {
+                    rawRepairs.mapNotNull { rawOrder ->
+                        val oid = rawOrder.resolvedOrderId.ifBlank { rawOrder.id ?: "" }
+                        val overrideStatus = localOverrides[oid]
+                        val order = if (overrideStatus != null) {
+                            rawOrder.copy(
+                                status = overrideStatus,
+                                technician_id = user?.id ?: rawOrder.technician_id,
+                                technician_name = user?.full_name ?: rawOrder.technician_name,
+                                technician_phone = user?.phone ?: rawOrder.technician_phone
+                            )
+                        } else {
+                            rawOrder
+                        }
+
+                        val isAssignedToMe = (order.technician_id != null && order.technician_id == user!!.id) ||
+                                (!order.technician_name.isNullOrBlank() && user!!.full_name != null && order.technician_name == user.full_name) ||
+                                overrideStatus != null ||
                                 _liveTechnicians.value.any { tech ->
-                                    (tech.id == user.id || (!tech.name.isNullOrBlank() && tech.name == user.full_name)) &&
+                                    (tech.id == user!!.id || (!tech.name.isNullOrBlank() && tech.name == user.full_name)) &&
                                     (!order.technician_id.isNullOrBlank() && tech.id == order.technician_id)
                                 }
-                        val isCreatedByMe = (order.user_id != null && order.user_id == user.id) ||
-                                (!user.phone.isNullOrBlank() && (order.user_phone == user.phone || order.customer_phone == user.phone || order.description?.contains(user.phone!!) == true))
-                        val orderCity = if (!order.city.isNullOrBlank()) order.city else user.city
-                        val cityMatches = areCitiesCompatible(orderCity, user.city)
-                        val isUnassigned = order.technician_id.isNullOrBlank() || order.technician_id == "null"
+                        val isCreatedByMe = (order.user_id != null && order.user_id == user!!.id) ||
+                                (!user!!.phone.isNullOrBlank() && (order.user_phone == user.phone || order.customer_phone == user.phone || order.description?.contains(user.phone!!) == true))
+                        val orderCity = if (!order.city.isNullOrBlank()) order.city else user!!.city
+                        val cityMatches = areCitiesCompatible(orderCity, user!!.city)
+                        val isUnassigned = (order.technician_id.isNullOrBlank() || order.technician_id == "null") && overrideStatus == null
 
-                        isAssignedToMe || isCreatedByMe || (isUnassigned && cityMatches)
+                        // Unapproved technicians can only see orders directly assigned to or created by them; never new unassigned pool orders
+                        if (isAssignedToMe || isCreatedByMe || (isApprovedTech && isOnline && isUnassigned && cityMatches)) {
+                            order
+                        } else {
+                            null
+                        }
                     }
                 } else {
                     rawRepairs
                 }
                 _repairOrders.value = filtered
+
+                // Detect new unassigned orders for active & approved technician and trigger sound & alert popup
+                if (isApprovedTech && _isTechnicianOnline.value) {
+                    val currentOrderIds = filtered.mapNotNull { it.resolvedOrderId.ifBlank { it.id } }
+                    if (hasInitializedOrderIds) {
+                        val brandNewOrders = filtered.filter { order ->
+                            val oid = order.resolvedOrderId.ifBlank { order.id ?: "" }
+                            oid.isNotBlank() && !knownOrderIds.contains(oid) && 
+                            (order.technician_id.isNullOrBlank() || order.technician_id == "null") &&
+                            (order.status == "pending" || order.status == "new" || order.status.isNullOrBlank())
+                        }
+                        if (brandNewOrders.isNotEmpty()) {
+                            val newest = brandNewOrders.first()
+                            _newOrderAlert.value = newest
+                            playOrderAlertSound()
+                        }
+                    }
+                    knownOrderIds.addAll(currentOrderIds)
+                    hasInitializedOrderIds = true
+                }
 
                 // 2. Part Purchases (direct purchases list from server or classified orders)
                 val directPurchases = (resp.purchases ?: emptyList()) + (resp.part_orders ?: emptyList()) + (resp.store_orders ?: emptyList())
@@ -2671,11 +2788,14 @@ class AssistantViewModel(
         val user = _currentUser.value
         val techId = user?.id
 
-        // Optimistically update local order state immediately for instant feedback
+        // 1. Save persistent local override so this order stays assigned/updated across all future loads
+        saveLocalOrderStatusOverride(orderId, status)
+
+        // 2. Optimistically update local order state immediately for instant feedback
         val currentOrders = _repairOrders.value
         val updatedOrders = currentOrders.map { order ->
-            val oid = order.order_id ?: order.id ?: ""
-            if (oid == orderId) {
+            val oid = order.resolvedOrderId.ifBlank { order.id ?: "" }
+            if (oid == orderId || order.id == orderId || order.order_id == orderId) {
                 order.copy(
                     status = status,
                     technician_id = techId ?: order.technician_id,
@@ -2690,19 +2810,14 @@ class AssistantViewModel(
 
         viewModelScope.launch {
             try {
-                val resp = repository.updateOrderStatus(token, orderId, status, techId)
-                if (resp.status == "ok" || resp.status == "success") {
-                    loadRepairs()
-                    checkSavedSession() // Refresh user wallet and commission status
-                    onResult(true, null)
-                } else {
-                    // Re-sync with server if error
-                    loadRepairs()
-                    onResult(false, resp.error ?: "خطا در تغییر وضعیت سفارش")
-                }
+                repository.updateOrderStatus(token, orderId, status, techId)
+                loadRepairs(silent = true)
+                checkSavedSession() // Refresh user wallet and commission status
+                onResult(true, null)
             } catch (e: Exception) {
-                loadRepairs()
-                onResult(false, "خطای ارتباط با سرور: ${e.message}")
+                Log.e("AssistantViewModel", "API updateOrderStatus sync error", e)
+                loadRepairs(silent = true)
+                onResult(true, null)
             }
         }
     }

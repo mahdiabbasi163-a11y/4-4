@@ -967,16 +967,30 @@ class AssistantRepository(
         token: String,
         status: String,
         technicianId: String? = null,
-        candidateIds: List<String> = emptyList()
+        candidateIds: List<String> = emptyList(),
+        phone: String? = null
     ): com.example.data.model.KodyarResponse =
         withContext(Dispatchers.IO) {
             val isOnline = (status == "active")
             val cleanStatus = if (isOnline) "active" else "vacation"
             val mediaType = "application/json; charset=utf-8".toMediaType()
 
-            // 1. Official status payload
+            val cleanPhone = phone?.trim()?.takeIf { it.isNotBlank() }
+            val cleanPhoneNoZero = cleanPhone?.removePrefix("0")
+            val cleanPhoneWithZero = cleanPhone?.let { if (it.startsWith("0")) it else "0$it" }
+
+            // 1. Official status payload including phone and id
             val officialJson = JSONObject().apply {
                 put("status", cleanStatus)
+                if (cleanPhone != null) {
+                    put("phone", cleanPhone)
+                    put("cleanPhone", cleanPhoneNoZero)
+                }
+                if (!technicianId.isNullOrBlank()) {
+                    put("id", technicianId)
+                    put("techId", technicianId)
+                    put("technician_id", technicianId)
+                }
             }
             val officialRequestBody = officialJson.toString().toRequestBody(mediaType)
 
@@ -991,17 +1005,28 @@ class AssistantRepository(
                 put("on_vacation", !isOnline)
                 put("is_available", isOnline)
                 put("available", isOnline)
+                if (cleanPhone != null) {
+                    put("phone", cleanPhone)
+                    put("cleanPhone", cleanPhoneNoZero)
+                    put("user_phone", cleanPhone)
+                }
+                if (!technicianId.isNullOrBlank()) {
+                    put("id", technicianId)
+                    put("techId", technicianId)
+                    put("technician_id", technicianId)
+                    put("user_id", technicianId)
+                }
             }
             val fullRequestBody = fullJson.toString().toRequestBody(mediaType)
 
-            val allIds = (listOfNotNull(technicianId) + candidateIds + listOf("me"))
+            val allIds = (listOfNotNull(technicianId) + candidateIds + listOfNotNull(cleanPhone, cleanPhoneWithZero, cleanPhoneNoZero))
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
                 .distinct()
 
             var anySuccess = false
 
-            // Step 1: Website Profile Update (Directly updates user record on site)
+            // Step 1: Website Profile Update
             try {
                 val typedProfileReq = com.example.data.model.UpdateProfileRequest(
                     status = cleanStatus,
@@ -1028,40 +1053,17 @@ class AssistantRepository(
                 Log.w("AssistantRepo", "updateProfileRaw failed: ${e.message}")
             }
 
-            // Step 2: Auth Me PUT & POST (For account level state on website)
-            try {
-                val res = kodyarApiService.updateMePut(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateMePost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-
-            // Step 3: User Profile & User Status endpoints
-            try {
-                val res = kodyarApiService.updateUserProfilePost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateUserProfilePut(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateUserStatusPost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateUserStatusPut(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-
-            // Step 4: Technician-specific endpoints for every candidate ID
+            // Step 2: Technician-specific status endpoints for candidate IDs
             for (id in allIds) {
                 val idJson = JSONObject().apply {
                     put("id", id)
+                    put("techId", id)
                     put("technician_id", id)
                     put("user_id", id)
+                    if (cleanPhone != null) {
+                        put("phone", cleanPhone)
+                        put("user_phone", cleanPhone)
+                    }
                     put("status", cleanStatus)
                     put("work_status", cleanStatus)
                     put("technician_status", cleanStatus)
@@ -1073,92 +1075,57 @@ class AssistantRepository(
                 }
                 val idRequestBody = idJson.toString().toRequestBody(mediaType)
 
-                // PUT /api/technicians/{id}
-                try {
-                    val res = kodyarApiService.updateTechnicianStatusDirect(token, id, officialRequestBody)
-                    if (res.isSuccessful) {
-                        anySuccess = true
-                        Log.d("AssistantRepo", "PUT /api/technicians/$id SUCCESS (${res.code()})")
-                    } else {
-                        val resFull = kodyarApiService.updateTechnicianStatusDirect(token, id, idRequestBody)
-                        if (resFull.isSuccessful) anySuccess = true
-
-                        val resPost = kodyarApiService.updateTechnicianStatusPostDirect(token, id, idRequestBody)
-                        if (resPost.isSuccessful) anySuccess = true
-                    }
-                } catch (e: Exception) {
-                    Log.w("AssistantRepo", "PUT/POST /api/technicians/$id failed: ${e.message}")
-                }
-
-                // PUT & POST /api/technicians/{id}/status
-                try {
-                    val res = kodyarApiService.updateTechnicianStatusById(token, id, officialRequestBody)
-                    if (res.isSuccessful) anySuccess = true
-                } catch (_: Exception) { }
+                // POST /api/technicians/{id}/status (Primary endpoint recognized by server)
                 try {
                     val res = kodyarApiService.updateTechnicianStatusByIdPost(token, id, idRequestBody)
-                    if (res.isSuccessful) anySuccess = true
-                } catch (_: Exception) { }
-
-                // PUT & POST /api/admin/technicians/{id}/status
-                try {
-                    val res = kodyarApiService.updateAdminTechnicianStatus(token, id, officialRequestBody)
-                    if (res.isSuccessful) anySuccess = true
-                } catch (_: Exception) { }
-                try {
-                    val res = kodyarApiService.updateAdminTechnicianStatusPost(token, id, idRequestBody)
-                    if (res.isSuccessful) anySuccess = true
-                } catch (_: Exception) { }
-
-                // Typed endpoint /api/technicians/update
-                if (id != "me") {
-                    try {
-                        val res = kodyarApiService.updateTechnicianStatus(
-                            token = token,
-                            request = com.example.data.model.TechnicianStatusUpdateRequest(
-                                technicianId = id,
-                                status = cleanStatus
-                            )
-                        )
-                        if (res.status == "ok" || res.status == "success" || res.success == true) {
-                            anySuccess = true
-                            Log.d("AssistantRepo", "updateTechnicianStatus typed SUCCESS for $id")
-                        }
-                    } catch (_: Exception) { }
+                    if (res.isSuccessful) {
+                        anySuccess = true
+                        Log.d("AssistantRepo", "POST /api/technicians/$id/status SUCCESS (${res.code()})")
+                    }
+                } catch (e: Exception) {
+                    Log.w("AssistantRepo", "POST /api/technicians/$id/status failed: ${e.message}")
                 }
+
+                // POST /api/technicians/{id}
+                try {
+                    val resPost = kodyarApiService.updateTechnicianStatusPostDirect(token, id, idRequestBody)
+                    if (resPost.isSuccessful) {
+                        anySuccess = true
+                        Log.d("AssistantRepo", "POST /api/technicians/$id SUCCESS (${resPost.code()})")
+                    }
+                } catch (_: Exception) { }
+
+                // Fallback PUT /api/technicians/{id}
+                try {
+                    val res = kodyarApiService.updateTechnicianStatusDirect(token, id, idRequestBody)
+                    if (res.isSuccessful) anySuccess = true
+                } catch (_: Exception) { }
             }
 
-            // Step 5: General technician status endpoints (without ID)
-            try {
-                val res = kodyarApiService.updateTechnicianStatusNoId(token, officialRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
+            // Step 3: General technician status endpoint (POST /api/technicians/status)
             try {
                 val res = kodyarApiService.updateTechnicianStatusNoIdPost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateTechniciansPost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateSingleTechnicianPost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateSingleTechnicianStatusPost(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
-            try {
-                val res = kodyarApiService.updateSingleTechnicianStatusPut(token, fullRequestBody)
-                if (res.isSuccessful) anySuccess = true
-            } catch (_: Exception) { }
+                if (res.isSuccessful) {
+                    anySuccess = true
+                    Log.d("AssistantRepo", "POST /api/technicians/status SUCCESS (${res.code()})")
+                }
+            } catch (e: Exception) {
+                Log.w("AssistantRepo", "POST /api/technicians/status failed: ${e.message}")
+            }
 
-            com.example.data.model.KodyarResponse(
-                status = "ok",
-                success = true,
-                message = "وضعیت تکنسین در سرور و سایت با موفقیت ثبت شد."
-            )
+            if (anySuccess) {
+                com.example.data.model.KodyarResponse(
+                    status = "ok",
+                    success = true,
+                    message = "وضعیت تکنسین در سرور و سایت با موفقیت ثبت شد."
+                )
+            } else {
+                com.example.data.model.KodyarResponse(
+                    status = "error",
+                    success = false,
+                    message = "خطا در برقراری ارتباط با سرور جهت ثبت وضعیت."
+                )
+            }
         }
 
     suspend fun updateProfile(token: String, fullName: String?, city: String?) =

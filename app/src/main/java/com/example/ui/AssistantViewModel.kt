@@ -291,7 +291,11 @@ class AssistantViewModel(
     }
 
     fun toggleTechnicianStatus(onResult: (Boolean, String?) -> Unit) {
+        val current = _currentUser.value
         val token = getSessionToken()
+            ?.takeIf { it.isNotBlank() }
+            ?: current?.id
+            ?: getSavedAuthPhone()
         val newStatus = !_isTechnicianOnline.value
         val statusString = if (newStatus) "active" else "vacation"
 
@@ -300,7 +304,6 @@ class AssistantViewModel(
         sharedPrefs.edit().putBoolean("technician_online_status", newStatus).apply()
 
         // 1. Immediately update local currentUser state
-        val current = _currentUser.value
         if (current != null) {
             val updated = current.copy(
                 status = statusString,
@@ -336,38 +339,45 @@ class AssistantViewModel(
         // Instantly refresh orders to filter out or bring back regional unassigned orders
         loadRepairs(silent = true)
 
-        if (token.isNullOrBlank()) {
-            _isTechStatusUpdating.value = false
-            onResult(true, null)
-            return
-        }
-
         viewModelScope.launch {
+            var serverSuccess = false
+            var serverError: String? = null
             try {
-                val current = _currentUser.value
                 val matchedTech = _liveTechnicians.value.find { tech ->
                     (tech.id?.isNotBlank() == true && (tech.id == current?.id || tech.user_id == current?.id)) ||
                     (!tech.phone.isNullOrBlank() && tech.phone == current?.phone) ||
                     (!tech.name.isNullOrBlank() && tech.name == current?.full_name)
                 }
                 val techId = matchedTech?.id?.takeIf { it.isNotBlank() } ?: current?.id
+                val userPhone = current?.phone ?: matchedTech?.phone ?: getSavedAuthPhone()
                 val candidateIds = listOfNotNull(
                     matchedTech?.id,
                     matchedTech?.user_id,
                     current?.id,
-                    current?.phone,
+                    userPhone,
                     matchedTech?.phone
                 ).filter { it.isNotBlank() }.distinct()
 
-                val res = repository.updateTechnicianStatusApi(token, statusString, techId, candidateIds)
-                if (res.status == "ok" || res.status == "success") {
+                val res = repository.updateTechnicianStatusApi(
+                    token = token,
+                    status = statusString,
+                    technicianId = techId,
+                    candidateIds = candidateIds,
+                    phone = userPhone
+                )
+                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                    serverSuccess = true
                     Log.d("AssistantViewModel", "Technician status successfully updated on server: $statusString")
+                } else {
+                    serverError = res.message ?: res.error
                 }
             } catch (e: Exception) {
+                serverError = e.message
                 Log.e("AssistantViewModel", "Error updating technician status on server", e)
             } finally {
                 _isTechStatusUpdating.value = false
-                onResult(true, null)
+                onResult(serverSuccess, serverError)
+                syncAllLiveAppData(isInitial = false)
             }
         }
     }
@@ -1242,9 +1252,10 @@ class AssistantViewModel(
         try {
             encryptedPrefs.edit().putString("session_token", token).apply()
         } catch (e: Exception) {
-            Log.e("AssistantViewModel", "Failed to save encrypted token, saving to sharedPrefs", e)
-            sharedPrefs.edit().putString("session_token", token).apply()
+            Log.e("AssistantViewModel", "Failed to save encrypted token", e)
         }
+        sharedPrefs.edit().putString("session_token", token).apply()
+        com.example.data.api.KodyarRetrofitClient.setAuthToken(token)
     }
 
     private fun clearSessionToken() {
@@ -1254,6 +1265,7 @@ class AssistantViewModel(
             Log.e("AssistantViewModel", "Failed to clear encrypted token", e)
         }
         sharedPrefs.edit().remove("session_token").apply()
+        com.example.data.api.KodyarRetrofitClient.setAuthToken(null)
     }
 
     // --- Session & Auth functions ---
@@ -1295,12 +1307,12 @@ class AssistantViewModel(
             null
         }
         if (!token.isNullOrBlank()) {
+            com.example.data.api.KodyarRetrofitClient.setAuthToken(token)
             return token
         }
         val legacyToken = sharedPrefs.getString("session_token", null)
         if (!legacyToken.isNullOrBlank()) {
-            saveSessionToken(legacyToken)
-            sharedPrefs.edit().remove("session_token").apply()
+            com.example.data.api.KodyarRetrofitClient.setAuthToken(legacyToken)
             return legacyToken
         }
         return null
@@ -1708,7 +1720,6 @@ class AssistantViewModel(
                     syncTechnicianStatusFromServer(mergedUser, _liveTechnicians.value)
                     saveSessionToken(tokenToSave)
                     sharedPrefs.edit()
-                        .remove("session_token")
                         .putString("local_user_pass_${cleanPhone}", hashPassword(cleanPass))
                         .putString("local_user_pass_${cleanPhone.removePrefix("0")}", hashPassword(cleanPass))
                         .apply()
@@ -1746,7 +1757,6 @@ class AssistantViewModel(
                         _currentUser.value = localUser
                         saveUserToCache(localUser)
                         saveSessionToken(localUser.id)
-                        sharedPrefs.edit().remove("session_token").apply()
                         syncAllLiveAppData(isInitial = false)
                         onResult(true, null)
                     } else {
@@ -1785,7 +1795,6 @@ class AssistantViewModel(
                     _currentUser.value = localUser
                     saveUserToCache(localUser)
                     saveSessionToken(localUser.id)
-                    sharedPrefs.edit().remove("session_token").apply()
                     loadFreeStatus()
                     loadRepairs()
                     onResult(true, null)
@@ -2003,7 +2012,6 @@ class AssistantViewModel(
                     saveUserToCache(finalUser)
                     saveSessionToken(tokenToSave)
                     sharedPrefs.edit()
-                        .remove("session_token")
                         .putString("local_user_pass_${cleanPhone}", hashPassword(cleanPass))
                         .putString("local_user_pass_${cleanPhone.removePrefix("0")}", hashPassword(cleanPass))
                         .putString("local_user_name_${cleanPhone}", name)

@@ -241,7 +241,7 @@ fun StoreScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(filteredParts) { part ->
+                items(filteredParts, key = { it.id ?: (it.name ?: "") + it.hashCode() }) { part ->
                     val inCart = cartItems.contains(part.id)
                     val outOfStock = part.resolvedStock <= 0
 

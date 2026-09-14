@@ -340,13 +340,39 @@ fun TechniciansScreen(
                                         fontSize = 14.sp,
                                         color = CodyarTextPrimary
                                     )
-                                    if (tech.resolvedIsVerified) {
+                                    if (tech.isSuspended) {
                                         Box(
                                             modifier = Modifier
-                                                .background(Color(0xFFEAFAF1), RoundedCornerShape(5.dp))
+                                                .background(Color(0xFFFDE8E8), RoundedCornerShape(5.dp))
                                                 .padding(horizontal = 7.dp, vertical = 2.dp)
                                         ) {
-                                            Text("✓ تایید شده", color = Color(0xFF1E8449), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            Text("⛔ تعلیق شده", color = Color(0xFFC81E1E), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else if (tech.isVacation) {
+                                        Box(
+                                            modifier = Modifier
+                                                .background(Color(0xFFFEF2F2), RoundedCornerShape(5.dp))
+                                                .border(1.dp, Color(0xFFFECACA), RoundedCornerShape(5.dp))
+                                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("🏖️ در مرخصی (آفلاین)", color = Color(0xFFDC2626), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else if (tech.resolvedIsVerified) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(Color(0xFFF0FDF4), RoundedCornerShape(5.dp))
+                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("🟢 آماده به کار", color = Color(0xFF16A34A), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(Color(0xFFEAFAF1), RoundedCornerShape(5.dp))
+                                                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("✓ تایید شده", color = Color(0xFF1E8449), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            }
                                         }
                                     } else {
                                         Box(
@@ -432,22 +458,43 @@ fun TechniciansScreen(
                                     }
                                 }
 
+                                val isDispatchable = !tech.isSuspended && !tech.isVacation
+
                                 Button(
                                     onClick = {
+                                        if (tech.isSuspended) return@Button
+                                        if (tech.isVacation) {
+                                            Toast.makeText(context, "این همکار در حال حاضر در مرخصی و آفلاین است و امکان اعزام ایشان وجود ندارد.", Toast.LENGTH_SHORT).show()
+                                            return@Button
+                                        }
                                         if (currentUser == null) {
                                             onShowAuth()
                                             return@Button
                                         }
                                         selectedTechForRepair = tech
                                     },
-                                    colors = ButtonDefaults.buttonColors(containerColor = CodyarNavy),
+                                    enabled = isDispatchable,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = CodyarNavy,
+                                        disabledContainerColor = if (tech.isVacation) Color(0xFFFEE2E2) else Color(0xFFE2E8F0)
+                                    ),
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(vertical = 8.dp)
                                 ) {
-                                    Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(13.dp))
+                                    Icon(
+                                        if (tech.isSuspended || tech.isVacation) Icons.Default.Close else Icons.Default.Phone,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(13.dp),
+                                        tint = if (tech.isSuspended) Color.Gray else if (tech.isVacation) Color(0xFFDC2626) else Color.White
+                                    )
                                     Spacer(modifier = Modifier.width(5.dp))
-                                    Text("اعزام تکنسین", fontSize = 12.sp)
+                                    Text(
+                                        if (tech.isSuspended) "غیرفعال توسط مدیریت" else if (tech.isVacation) "همکار در مرخصی و آفلاین است" else "اعزام تکنسین",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (tech.isSuspended) Color.Gray else if (tech.isVacation) Color(0xFFDC2626) else Color.White
+                                    )
                                 }
                             }
                         }
@@ -742,13 +789,13 @@ fun TechniciansScreen(
 
                         val formattedDesc = "دستگاه و برند: $deviceBrand\n" +
                                 "شرح خرابی: $problemDesc\n" +
-                                "زمان پیشنهادی مراجعه کارشناس: $preferredDate\n" +
-                                "تلفن تماس هماهنگی: $contactPhone"
+                                "زمان پیشنهادی مراجعه کارشناس: $preferredDate"
 
                         viewModel.submitRepairRequest(
                             techId = tech.id ?: "",
                             description = formattedDesc,
-                            city = repairCity
+                            city = repairCity,
+                            customerPhone = contactPhone
                         ) { success, err ->
                             isSubmitting = false
                             if (success) {

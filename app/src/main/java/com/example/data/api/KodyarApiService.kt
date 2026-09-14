@@ -12,6 +12,7 @@ import com.example.data.model.*
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
+import retrofit2.Response
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.*
 import java.util.concurrent.TimeUnit
@@ -79,6 +80,24 @@ interface KodyarApiService {
         @Body request: UpdateProfileRequest
     ): KodyarResponse
 
+    @POST("auth/update-profile")
+    suspend fun updateProfileRaw(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("auth/me")
+    suspend fun updateMePut(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("auth/me")
+    suspend fun updateMePost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
     // 2️⃣ بانک کدهای خطا (Error Codes)
     @GET("error-codes")
     suspend fun getErrorCodes(
@@ -95,6 +114,9 @@ interface KodyarApiService {
         @Query("brand") brand: String? = null,
         @Query("device_type") deviceType: String? = null
     ): KodyarDatabaseResponse
+
+    @GET("error-codes/meta")
+    suspend fun getErrorCodeMeta(): Any
 
     @GET("error-codes/{id}")
     suspend fun getErrorCodeDetail(
@@ -181,7 +203,21 @@ interface KodyarApiService {
 
     @GET("orders")
     suspend fun getAllOrders(
-        @Header("Authorization") token: String? = null
+        @Header("Authorization") token: String? = null,
+        @Query("role") role: String? = null
+    ): KodyarResponse
+
+    @GET("orders/track")
+    suspend fun trackOrder(
+        @Query("code") code: String? = null,
+        @Query("phone") phone: String? = null
+    ): KodyarResponse
+
+    @POST("orders/{id}/rate")
+    suspend fun rateOrder(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: Map<String, Any?>
     ): KodyarResponse
 
     @GET("orders/my-orders")
@@ -199,10 +235,132 @@ interface KodyarApiService {
     @GET("settings/card-info")
     suspend fun getCardInfo(): CardInfoResponse
 
+    @GET("settings")
+    suspend fun getGlobalSettings(): Map<String, Any?>
+
+    @GET("wallet/balance")
+    suspend fun getWalletBalance(
+        @Header("Authorization") token: String? = null
+    ): KodyarResponse
+
+    @PUT("technicians/{id}")
+    suspend fun updateTechnicianStatusDirect(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("technicians/{id}")
+    suspend fun updateTechnicianStatusPostDirect(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("technicians/{id}/status")
+    suspend fun updateTechnicianStatusById(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("technicians/{id}/status")
+    suspend fun updateTechnicianStatusByIdPost(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("admin/technicians/{id}/status")
+    suspend fun updateAdminTechnicianStatus(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("admin/technicians/{id}/status")
+    suspend fun updateAdminTechnicianStatusPost(
+        @Header("Authorization") token: String? = null,
+        @Path("id") id: String,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("technicians/status")
+    suspend fun updateTechnicianStatusNoId(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("technicians/status")
+    suspend fun updateTechnicianStatusNoIdPost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("technicians/update")
+    suspend fun updateTechniciansPost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("technician/update")
+    suspend fun updateSingleTechnicianPost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("technician/status")
+    suspend fun updateSingleTechnicianStatusPost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("technician/status")
+    suspend fun updateSingleTechnicianStatusPut(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("user/profile")
+    suspend fun updateUserProfilePost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("user/profile")
+    suspend fun updateUserProfilePut(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("user/status")
+    suspend fun updateUserStatusPost(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @PUT("user/status")
+    suspend fun updateUserStatusPut(
+        @Header("Authorization") token: String? = null,
+        @Body request: okhttp3.RequestBody
+    ): Response<okhttp3.ResponseBody>
+
+    @POST("payment/request")
+    suspend fun submitPaymentRequest(
+        @Header("Authorization") token: String? = null,
+        @Body request: Map<String, Any?>
+    ): KodyarResponse
+
     @POST("payments/receipt")
     suspend fun submitReceipt(
         @Header("Authorization") token: String? = null,
         @Body request: ReceiptPaymentRequest
+    ): KodyarResponse
+
+    @POST("technicians/settle-commission")
+    suspend fun settleCommission(
+        @Header("Authorization") token: String? = null,
+        @Body request: SettleCommissionRequest
     ): KodyarResponse
 
     @GET("subscriptions/my-status")
@@ -582,6 +740,16 @@ data class ReceiptPaymentRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class SettleCommissionRequest(
+    val techId: String? = null,
+    val phone: String? = null,
+    val amount: Long? = null,
+    val paymentMethod: String? = "card_to_card",
+    val trackingCode: String? = null,
+    val orderId: String? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class CardInfoData(
     val cardNumber: String? = null,
     val card_number: String? = null,
@@ -682,9 +850,9 @@ object KodyarRetrofitClient {
     }
 
     val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(25, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .writeTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .addInterceptor(headerInterceptor)
         .addInterceptor(failoverInterceptor)
         .addInterceptor(loggingInterceptor)

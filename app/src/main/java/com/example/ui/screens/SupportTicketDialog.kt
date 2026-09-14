@@ -52,11 +52,11 @@ fun SupportTicketDialog(
 
     var screenMode by remember { mutableStateOf(TicketScreenMode.LIST) }
 
-    // Initial load and live background polling while dialog is open
+    // Initial load and silent background polling while dialog is open
     LaunchedEffect(Unit) {
         viewModel.loadUserTickets()
         while (true) {
-            kotlinx.coroutines.delay(4000) // Poll every 4 seconds silently
+            kotlinx.coroutines.delay(25_000L) // Poll every 25 seconds silently
             viewModel.loadUserTickets(silent = true)
         }
     }

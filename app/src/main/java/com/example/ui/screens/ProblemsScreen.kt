@@ -71,19 +71,24 @@ fun ProblemsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            val filtered = remember(problemsList, problemsSearchQuery) {
+                if (problemsSearchQuery.isBlank()) {
+                    problemsList
+                } else {
+                    problemsList.filter {
+                        (it.title ?: "").contains(problemsSearchQuery, ignoreCase = true) ||
+                        (it.brand ?: "").contains(problemsSearchQuery, ignoreCase = true) ||
+                        (it.category ?: "").contains(problemsSearchQuery, ignoreCase = true)
+                    }
+                }
+            }
+
             // Problem Item lists
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                val filtered = problemsList.filter {
-                    problemsSearchQuery.isEmpty() ||
-                            (it.title ?: "").contains(problemsSearchQuery, ignoreCase = true) ||
-                            (it.brand ?: "").contains(problemsSearchQuery, ignoreCase = true) ||
-                            (it.category ?: "").contains(problemsSearchQuery, ignoreCase = true)
-                }
-
-                items(filtered) { prob ->
+                items(filtered, key = { it.id ?: "${it.title}_${it.brand}_${it.category}" }) { prob ->
                     Card(
                         onClick = {
                             if (isPremium) {

@@ -16,12 +16,21 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import java.text.NumberFormat
+import java.util.Locale
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,12 +52,30 @@ fun OrdersScreen(
     val isTechnicianOnline by viewModel.isTechnicianOnline.collectAsState()
     val isTechStatusUpdating by viewModel.isTechStatusUpdating.collectAsState()
     val isTech = currentUser?.isTechnicianUser == true || (currentUser?.role == "technician" || currentUser?.role == "tech" || currentUser?.role == "repairman")
+    val isApprovedTech = isTech && currentUser?.isApprovedUser == true
 
     var selectedSubTab by remember { mutableStateOf(0) } // 0: Repair Orders, 1: Part Purchases
     val context = LocalContext.current
 
+    var showCompleteOrderDialog by remember { mutableStateOf<KodyarRepairOrder?>(null) }
+    var completeOrderAmountInput by remember { mutableStateOf("") }
+    var isSubmittingComplete by remember { mutableStateOf(false) }
+
+    // State for Unlocking Customer Contact Info with 15% Commission (Card-to-Card)
+    var showUnlockOrderDialog by remember { mutableStateOf<KodyarRepairOrder?>(null) }
+    var trackingNumberInput by remember { mutableStateOf("") }
+    var depositorNameInput by remember { mutableStateOf(currentUser?.full_name ?: "") }
+    var isSubmittingUnlock by remember { mutableStateOf(false) }
+
+    val bankCardInfo by viewModel.bankCardInfo.collectAsState()
+
     LaunchedEffect(Unit) {
         viewModel.loadRepairs()
+        viewModel.loadBankCardInfo()
+        while (true) {
+            kotlinx.coroutines.delay(20_000L)
+            viewModel.loadRepairs(silent = true)
+        }
     }
 
     Column(
@@ -126,254 +153,231 @@ fun OrdersScreen(
 
         if (selectedSubTab == 0) {
             // Repair Orders Tab
-
-            // Technician Online / Vacation Status Card
-            if (isTech) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    colors = CardDefaults.cardColors(containerColor = if (isTechnicianOnline) Color(0xFFF0FDF4) else Color(0xFFFEF2F2)),
-                    border = BorderStroke(1.dp, if (isTechnicianOnline) Color(0xFFBBF7D0) else Color(0xFFFECACA)),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(12.dp)
-                                    .background(if (isTechnicianOnline) Color(0xFF16A34A) else Color(0xFFDC2626), CircleShape)
-                            )
-                            Column {
-                                Text(
-                                    text = if (isTechnicianOnline) "وضعیت تکنسین: آماده به کار 🟢" else "وضعیت تکنسین: در حال مرخصی 🏖️",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isTechnicianOnline) Color(0xFF166534) else Color(0xFF991B1B)
-                                )
-                                Text(
-                                    text = if (isTechnicianOnline) "سفارش‌های جدید شهر ${currentUser?.city ?: ""} بلافاصله به شما اعلام می‌شود" else "سفارش جدیدی از منطقه برای شما ارسال نمی‌شود",
-                                    fontSize = 10.sp,
-                                    color = if (isTechnicianOnline) Color(0xFF15803D) else Color(0xFFB91C1C)
-                                )
-                            }
-                        }
-                        Button(
-                            onClick = {
-                                if (!isTechStatusUpdating) {
-                                    val willBeOnline = !isTechnicianOnline
-                                    viewModel.toggleTechnicianStatus { success, err ->
-                                        if (success) {
-                                            val msg = if (willBeOnline) "وضعیت: آماده به کار و دریافت سفارش ✅" else "وضعیت: مرخصی (عدم دریافت سفارش) 🏖️"
-                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, err ?: "خطا در تغییر وضعیت", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isTechnicianOnline) Color(0xFFDC2626) else Color(0xFF16A34A)
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            if (isTechStatusUpdating) {
-                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = Color.White)
-                            } else {
-                                Text(
-                                    text = if (isTechnicianOnline) "رفتن به مرخصی" else "خروج از مرخصی",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Commission Debt Alert Banner for Technician
-            if (isTech && currentUser?.hasCommissionDebt == true) {
-                val debtAmount = currentUser?.resolvedDebt ?: 0.0
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
-                    border = BorderStroke(1.dp, Color(0xFFFECACA)),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text("🔒", fontSize = 24.sp)
-                            Column {
-                                Text(
-                                    "هشدار تسویه کمیسیون و بدهی پلتفرم",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF991B1B)
-                                )
-                                Text(
-                                    if (debtAmount > 0) "مبلغ بدهی کمیسیون: ${formatToman(debtAmount)} تومان" else "حساب شما دارای بدهی کمیسیون است",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFDC2626)
-                                )
-                            }
-                        }
-                        Text(
-                            "تکنسین گرامی! بر اساس قوانین کدیار۲۴، جهت فعال‌سازی مجدد و مشاهده اطلاعات تماس سفارش‌های جدید و قبول مسئولیت کار، لطفاً نسبت به تسویه آنلاین کمیسیون اقدام فرمایید. به محض تسویه، قفل سفارش‌ها به‌صورت آنی باز خواهد شد.",
-                            fontSize = 12.sp,
-                            color = Color(0xFF7F1D1D),
-                            lineHeight = 18.sp
-                        )
-                        Button(
-                            onClick = {
-                                viewModel.openCommissionSettlement(context)
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("💳 تسویه آنلاین کمیسیون (درگاه شتاب)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                    }
-                }
-            }
-
-            if (isTech && currentUser?.isApprovedUser != true) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEFCE8)),
-                    border = BorderStroke(1.dp, Color(0xFFFEF08A)),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text("📋", fontSize = 24.sp)
-                            Column {
-                                Text(
-                                    "وضعیت حساب تکنسین: در انتظار بررسی و تایید مدیریت ⏳",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFF854D0E)
-                                )
-                                Text(
-                                    "شهر فعالیت: ${currentUser?.city ?: "ثبت نشده"}",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFFA16207)
-                                )
-                            }
-                        }
-                        HorizontalDivider(color = Color(0xFFFEF08A))
-                        Text(
-                            "تکنسین گرامی (${currentUser?.full_name ?: ""})! مدارک سه‌گانه شما ثبت شده و برای مدیریت ارسال گردیده است. پس از تایید مدیریت، سفارش‌های درخواست تعمیر مشتریان در شهر ${currentUser?.city ?: ""} برای شما فعال خواهد شد.",
-                            fontSize = 12.sp,
-                            color = Color(0xFF713F12),
-                            lineHeight = 18.sp
-                        )
-                        Text(
-                            "💡 توجه: کلیه امکانات عمومی برنامه شامل کدهای خطا، مشکلات متداول، خرید قطعات یدکی و تهیه اشتراک برای شما مانند سایر کاربران فعال و قابل استفاده است.",
-                            fontSize = 11.sp,
-                            color = Color(0xFF854D0E),
-                            fontWeight = FontWeight.Medium
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.checkTechnicianApprovalStatus { _, message ->
-                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(8.dp),
-                                border = BorderStroke(1.dp, Color(0xFFCA8A04))
-                            ) {
-                                Text("🔄 استعلام وضعیت تایید از سرور مدیریت", fontSize = 11.sp, color = Color(0xFF854D0E), fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-
             if (isRepairsLoading) {
-                Box(modifier = Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = CodyarNavy)
-                }
-            } else if (repairOrders.isEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(vertical = 50.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(if (isTech) (if (!isTechnicianOnline) "🏖️" else "📋") else "🔧", fontSize = 44.sp)
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = if (isTech) (if (!isTechnicianOnline) "شما در حالت مرخصی هستید" else "سفارش تعمیری برای انجام وجود ندارد") else "سفارشی ثبت نشده است",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = CodyarTextPrimary
-                    )
-                    Text(
-                        text = if (isTech) (if (!isTechnicianOnline) "در زمان مرخصی، سفارش‌های جدید شهر دریافت نمی‌شوند. جهت دریافت سفارش، وضعیت خود را به آماده‌به‌کار تغییر دهید." else "سفارش‌های جدید ارجاع شده از طرف مشتریان در این بخش قرار می‌گیرند") else "جهت ثبت درخواست با تکنسین تماس حاصل فرمایید",
-                        fontSize = 13.sp,
-                        color = Color.Gray,
-                        modifier = Modifier.padding(bottom = 20.dp),
-                        textAlign = TextAlign.Center
-                    )
-                    if (isTech) {
-                        Button(
-                            onClick = { viewModel.loadRepairs() },
-                            colors = ButtonDefaults.buttonColors(containerColor = CodyarNavy)
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("بروزرسانی سفارش‌ها")
-                        }
-                    } else {
-                        Button(
-                            onClick = onNavigateToTechs,
-                            colors = ButtonDefaults.buttonColors(containerColor = CodyarNavy)
-                        ) {
-                            Text("لیست تکنسین‌ها")
-                        }
-                    }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(repairOrders.size) { i ->
+                    // Technician Online / Vacation Status Card
+                    if (isTech && isApprovedTech) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp),
+                                colors = CardDefaults.cardColors(containerColor = if (isTechnicianOnline) Color(0xFFF0FDF4) else Color(0xFFFEF2F2)),
+                                border = BorderStroke(1.dp, if (isTechnicianOnline) Color(0xFFBBF7D0) else Color(0xFFFECACA)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(12.dp)
+                                                .background(if (isTechnicianOnline) Color(0xFF16A34A) else Color(0xFFDC2626), CircleShape)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = if (isTechnicianOnline) "وضعیت: آماده به کار 🟢" else "وضعیت: در حال مرخصی 🏖️",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isTechnicianOnline) Color(0xFF166534) else Color(0xFF991B1B)
+                                            )
+                                            Text(
+                                                text = if (isTechnicianOnline) "سفارش‌های شهر ${currentUser?.city ?: ""} به شما نمایش داده می‌شود" else "در مرخصی سفارش جدیدی ارسال نمی‌شود",
+                                                fontSize = 10.sp,
+                                                color = if (isTechnicianOnline) Color(0xFF15803D) else Color(0xFFB91C1C)
+                                            )
+                                        }
+                                    }
+                                    Button(
+                                        onClick = {
+                                            if (!isTechStatusUpdating) {
+                                                val willBeOnline = !isTechnicianOnline
+                                                viewModel.toggleTechnicianStatus { success, err ->
+                                                    if (success) {
+                                                        val msg = if (willBeOnline) "وضعیت: آماده به کار ✅" else "وضعیت: مرخصی 🏖️"
+                                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(context, err ?: "خطا در تغییر وضعیت", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isTechnicianOnline) Color(0xFFDC2626) else Color(0xFF16A34A)
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(34.dp)
+                                    ) {
+                                        if (isTechStatusUpdating) {
+                                            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = Color.White)
+                                        } else {
+                                            Text(
+                                                text = if (isTechnicianOnline) "رفتن به مرخصی" else "خروج از مرخصی",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (isTech && currentUser?.isSuspended == true) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
+                                border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text("⛔", fontSize = 18.sp)
+                                        Text(
+                                            "حساب کاربری تعلیق شده است",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = Color(0xFF991B1B)
+                                        )
+                                    }
+                                    Text(
+                                        "امکان پذیرش سفارش جدید وجود ندارد. جهت بررسی با پشتیبانی تماس بگیرید.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF7F1D1D)
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.checkTechnicianApprovalStatus { _, message ->
+                                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFDC2626))
+                                    ) {
+                                        Text("🔄 استعلام وضعیت رفع تعلیق", fontSize = 11.sp, color = Color(0xFF991B1B), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    } else if (isTech && currentUser?.isApprovedUser != true) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEFCE8)),
+                                border = BorderStroke(1.dp, Color(0xFFFEF08A)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text("⏳", fontSize = 18.sp)
+                                        Text(
+                                            "در انتظار بررسی و تایید مدارک",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = Color(0xFF854D0E)
+                                        )
+                                    }
+                                    Text(
+                                        "مدارک شما در حال بررسی است. پس از تایید، سفارش‌های شهر ${currentUser?.city ?: ""} برای شما فعال خواهد شد.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF713F12)
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.checkTechnicianApprovalStatus { _, message ->
+                                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        border = BorderStroke(1.dp, Color(0xFFCA8A04))
+                                    ) {
+                                        Text("🔄 استعلام وضعیت تایید مدارک", fontSize = 11.sp, color = Color(0xFF854D0E), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (repairOrders.isEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 40.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(if (isTech) (if (!isTechnicianOnline) "🏖️" else "📋") else "🔧", fontSize = 44.sp)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = if (isTech) (if (!isTechnicianOnline) "شما در حالت مرخصی هستید" else "سفارش تعمیری برای انجام وجود ندارد") else "سفارشی ثبت نشده است",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = CodyarTextPrimary
+                                )
+                                Text(
+                                    text = if (isTech) (if (!isTechnicianOnline) "در زمان مرخصی، سفارش‌های جدید شهر دریافت نمی‌شوند." else "سفارش‌های جدید ارجاع شده از طرف مشتریان در این بخش قرار می‌گیرند") else "جهت ثبت درخواست با تکنسین تماس حاصل فرمایید",
+                                    fontSize = 13.sp,
+                                    color = Color.Gray,
+                                    modifier = Modifier.padding(bottom = 20.dp),
+                                    textAlign = TextAlign.Center
+                                )
+                                if (isTech) {
+                                    Button(
+                                        onClick = { viewModel.loadRepairs() },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CodyarNavy)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("بروزرسانی سفارش‌ها")
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = onNavigateToTechs,
+                                        colors = ButtonDefaults.buttonColors(containerColor = CodyarNavy)
+                                    ) {
+                                        Text("لیست تکنسین‌ها")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        items(repairOrders.size) { i ->
                         val o = repairOrders[i]
                         val rawStatus = (o.status ?: "").lowercase().trim()
                         val customLabel = o.status_label_fa ?: o.statusLabelFa
@@ -425,9 +429,32 @@ fun OrdersScreen(
                                     }
                                 }
 
-                                if (o.resolvedDescription.isNotBlank()) {
+                                val orderIdToAct = o.resolvedOrderId.ifBlank { o.order_id ?: o.id ?: "" }
+                                val isAssignedToCurrentTech = !o.technician_id.isNullOrBlank() && (o.technician_id == currentUser?.id || o.technician_phone == currentUser?.phone || o.technician_name == currentUser?.full_name)
+                                val isAcceptedOrAssigned = rawStatus in listOf("assigned", "accepted", "تایید شده", "ارجاع به تکنسین", "اختصاص داده شد") || isAssignedToCurrentTech
+                                val isOngoing = rawStatus in listOf("in_progress", "ongoing", "processing", "در حال انجام", "در مسیر")
+                                val isDone = rawStatus in listOf("completed", "done", "تکمیل شده", "انجام شد", "cancelled", "rejected", "لغو شده")
+                                val isUnlockedForTech = isAssignedToCurrentTech && (isAcceptedOrAssigned || isOngoing || isDone)
+
+                                val displayDesc = remember(o.resolvedDescription, isTech, isUnlockedForTech) {
+                                    if (isTech && !isUnlockedForTech) {
+                                        o.resolvedDescription
+                                            .lines()
+                                            .filterNot { line ->
+                                                val l = line.lowercase()
+                                                l.contains("تلفن") || l.contains("تماس") || l.contains("همراه") || l.contains("شماره")
+                                            }
+                                            .joinToString("\n")
+                                            .replace(Regex("""(09|\+989|۰۹)[0-9۰-۹\s\-]{8,12}"""), "")
+                                            .trim()
+                                    } else {
+                                        o.resolvedDescription
+                                    }
+                                }
+
+                                if (displayDesc.isNotBlank()) {
                                     Text(
-                                        text = o.resolvedDescription,
+                                        text = displayDesc,
                                         fontSize = 13.sp,
                                         color = CodyarTextPrimary,
                                         modifier = Modifier
@@ -439,8 +466,13 @@ fun OrdersScreen(
                                 }
 
                                 if (!o.city.isNullOrBlank()) {
+                                    val showFullAddress = !isTech || isUnlockedForTech
                                     Text(
-                                        text = "📍 شهر / آدرس: ${o.city}${if (!o.address.isNullOrBlank()) " - ${o.address}" else ""}",
+                                        text = if (showFullAddress) {
+                                            "📍 شهر و آدرس: ${o.city}${if (!o.address.isNullOrBlank()) " - ${o.address}" else ""}"
+                                        } else {
+                                            "📍 محدوده سفارش: ${o.city}"
+                                        },
                                         fontSize = 12.sp,
                                         color = CodyarTextSecondary,
                                         modifier = Modifier.padding(bottom = 6.dp)
@@ -457,54 +489,10 @@ fun OrdersScreen(
                                     )
                                 }
 
-                                // If Technician: show Customer Contact Info (Protected by Commission Debt Check)
+                                // If Technician: Protect Customer Contact Info & Require 15% Commission Payment First (Card-to-Card)
                                 if (isTech) {
-                                    val isLockedByDebt = currentUser?.hasCommissionDebt == true && rawStatus !in listOf("in_progress", "completed", "done")
-                                    val hasCustomerInfo = o.resolvedCustomerName.isNotBlank() || o.resolvedCustomerPhone.isNotBlank()
-
-                                    if (isLockedByDebt) {
-                                        // 🔒 Locked Info due to platform commission debt
-                                        Surface(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 6.dp),
-                                            color = Color(0xFFFEF2F2),
-                                            shape = RoundedCornerShape(8.dp),
-                                            border = BorderStroke(1.dp, Color(0xFFFECACA))
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(10.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.SpaceBetween
-                                            ) {
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        text = "🔒 اطلاعات تماس و آدرس قفل است",
-                                                        fontSize = 12.sp,
-                                                        color = Color(0xFF991B1B),
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                    Text(
-                                                        text = "جهت مشاهده شماره تماس مشتری و پذیرش سفارش، بدهی کمیسیون قبلی را تسویه کنید.",
-                                                        fontSize = 11.sp,
-                                                        color = Color(0xFFB91C1C),
-                                                        lineHeight = 16.sp
-                                                    )
-                                                }
-                                                Button(
-                                                    onClick = {
-                                                        viewModel.openCommissionSettlement(context)
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                                    shape = RoundedCornerShape(6.dp),
-                                                    modifier = Modifier.height(32.dp)
-                                                ) {
-                                                    Text("تسویه کمیسیون", fontSize = 11.sp, color = Color.White)
-                                                }
-                                            }
-                                        }
-                                    } else if (hasCustomerInfo) {
+                                    if (isUnlockedForTech) {
+                                        // 🔓 Unlocked: Technician has paid 15% commission and claimed the order
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -543,7 +531,7 @@ fun OrdersScreen(
                                                             Toast.makeText(context, "شماره مشتری: ${o.resolvedCustomerPhone}", Toast.LENGTH_LONG).show()
                                                         }
                                                     },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8)),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
                                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                                                     shape = RoundedCornerShape(6.dp),
                                                     modifier = Modifier.height(32.dp)
@@ -558,107 +546,112 @@ fun OrdersScreen(
                                                 }
                                             }
                                         }
-                                    }
+                                    } else {
+                                        // 🔒 Locked: Hidden until 15% commission is paid (Card-to-Card)
+                                        Surface(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 6.dp),
+                                            color = Color(0xFFFFFBEB),
+                                            shape = RoundedCornerShape(10.dp),
+                                            border = BorderStroke(1.dp, Color(0xFFFDE68A))
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                val rawPhone = o.resolvedCustomerPhone.trim()
+                                                val phonePrefix = if (rawPhone.length >= 7) {
+                                                    rawPhone.dropLast(4)
+                                                } else if (rawPhone.isNotBlank()) {
+                                                    rawPhone.take(4)
+                                                } else {
+                                                    "۰۹"
+                                                }
+                                                val phoneMask = if (rawPhone.length >= 7 || rawPhone.isNotBlank()) "****" else "********"
 
-                                    // Action buttons for Technician (Accept, Start, Complete)
-                                    val orderIdToAct = o.order_id ?: o.id ?: ""
-                                    val isAssignedToCurrentTech = !o.technician_id.isNullOrBlank() && (o.technician_id == currentUser?.id || o.technician_name == currentUser?.full_name)
-                                    val isAcceptedOrAssigned = rawStatus in listOf("assigned", "accepted", "تایید شده", "ارجاع به تکنسین", "اختصاص داده شد") || isAssignedToCurrentTech
-                                    val isOngoing = rawStatus in listOf("in_progress", "ongoing", "processing", "در حال انجام", "در مسیر")
-                                    val isDone = rawStatus in listOf("completed", "done", "تکمیل شده", "انجام شد", "cancelled", "rejected", "لغو شده")
-
-                                    if (orderIdToAct.isNotBlank() && !isDone) {
-                                        if (isOngoing) {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Button(
-                                                onClick = {
-                                                    viewModel.updateOrderStatus(orderIdToAct, "completed") { success, err ->
-                                                        if (success) {
-                                                            Toast.makeText(context, "سفارش پایان یافت و کمیسیون ۱۵٪ ثبت گردید ✅", Toast.LENGTH_LONG).show()
-                                                        } else {
-                                                            Toast.makeText(context, err ?: "خطا", Toast.LENGTH_SHORT).show()
-                                                        }
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "📞 شماره تماس مشتری:",
+                                                        fontSize = 12.5.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = Color(0xFF78350F)
+                                                    )
+                                                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                                        Text(
+                                                            text = "$phonePrefix$phoneMask",
+                                                            fontSize = 13.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = Color(0xFF78350F)
+                                                        )
                                                     }
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E)),
-                                                shape = RoundedCornerShape(8.dp),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text("اتمام تعمیر و دریافت دستمزد از مشتری ✅", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                            }
-                                        } else if (isAcceptedOrAssigned) {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                Button(
-                                                    onClick = {
-                                                        viewModel.updateOrderStatus(orderIdToAct, "in_progress") { success, err ->
-                                                            if (success) {
-                                                                Toast.makeText(context, "وضعیت به در حال انجام تغییر یافت", Toast.LENGTH_SHORT).show()
-                                                            } else {
-                                                                Toast.makeText(context, err ?: "خطا", Toast.LENGTH_SHORT).show()
-                                                            }
-                                                        }
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text("شروع کار / اعزام 🛠️", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                                 }
                                                 Button(
                                                     onClick = {
-                                                        viewModel.updateOrderStatus(orderIdToAct, "completed") { success, err ->
-                                                            if (success) {
-                                                                Toast.makeText(context, "سفارش با موفقیت پایان یافت و کمیسیون ۱۵٪ کسر گردید ✅", Toast.LENGTH_LONG).show()
-                                                            } else {
-                                                                Toast.makeText(context, err ?: "خطا", Toast.LENGTH_SHORT).show()
-                                                            }
-                                                        }
+                                                        showUnlockOrderDialog = o
                                                     },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E)),
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    modifier = Modifier.weight(1f)
-                                                ) {
-                                                    Text("اتمام و تسویه با مشتری ✅", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                                }
-                                            }
-                                        } else {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            if (currentUser?.hasCommissionDebt == true) {
-                                                Button(
-                                                    onClick = {
-                                                        viewModel.openCommissionSettlement(context)
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    modifier = Modifier.fillMaxWidth()
-                                                ) {
-                                                    Text("🔒 تسویه کمیسیون جهت قبول سفارش", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                                }
-                                            } else {
-                                                Button(
-                                                    onClick = {
-                                                        viewModel.acceptRepairOrder(orderIdToAct) { success, err ->
-                                                            if (success) {
-                                                                Toast.makeText(context, "سفارش با موفقیت به شما اختصاص یافت ✅", Toast.LENGTH_SHORT).show()
-                                                            } else {
-                                                                Toast.makeText(context, err ?: "خطا در قبول سفارش", Toast.LENGTH_LONG).show()
-                                                            }
-                                                        }
-                                                    },
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
                                                     shape = RoundedCornerShape(8.dp),
                                                     modifier = Modifier.fillMaxWidth()
                                                 ) {
                                                     Text(
-                                                        text = if (currentUser?.isFirstOrderFree == true) "قبول و ثبت به نام من (سفارش اول رایگان 🎁)" else "قبول و ثبت به نام من 🤝",
+                                                        text = "پرداخت کمیسیون کدیار24 و قبول سفارش کار",
                                                         fontSize = 12.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         color = Color.White
                                                     )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Action buttons for Technician (Start, Complete, or Unlock)
+                                    if (orderIdToAct.isNotBlank() && !isDone) {
+                                        if (isUnlockedForTech) {
+                                            if (isOngoing) {
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Button(
+                                                    onClick = {
+                                                        showCompleteOrderDialog = o
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E)),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text("اتمام تعمیر و تحویل دستگاه به مشتری ✅", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            } else if (isAcceptedOrAssigned) {
+                                                Spacer(modifier = Modifier.height(6.dp))
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    Button(
+                                                        onClick = {
+                                                            viewModel.updateOrderStatus(orderIdToAct, "in_progress") { success, err ->
+                                                                if (success) {
+                                                                    Toast.makeText(context, "وضعیت به در حال انجام تغییر یافت", Toast.LENGTH_SHORT).show()
+                                                                } else {
+                                                                    Toast.makeText(context, err ?: "خطا", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            }
+                                                        },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text("اعزام به محل مشتری 🛠️", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                    }
+                                                    Button(
+                                                        onClick = {
+                                                            showCompleteOrderDialog = o
+                                                        },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E)),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        Text("اتمام کار و تحویل ✅", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                    }
                                                 }
                                             }
                                         }
@@ -735,7 +728,8 @@ fun OrdersScreen(
                     }
                 }
             }
-        } else {
+        }
+    } else {
             // Part Purchases Tab
             if (partPurchases.isEmpty()) {
                 Column(
@@ -910,5 +904,254 @@ fun OrdersScreen(
                 }
             }
         }
+    }
+
+    // Dialog for Technician to confirm order completion
+    if (showCompleteOrderDialog != null) {
+        val order = showCompleteOrderDialog!!
+        val orderId = order.resolvedOrderId.ifBlank { order.order_id ?: order.id ?: "" }
+
+        AlertDialog(
+            onDismissRequest = { if (!isSubmittingComplete) showCompleteOrderDialog = null },
+            icon = {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF0F766E), modifier = Modifier.size(36.dp))
+            },
+            title = {
+                Text(
+                    text = "ثبت اتمام کار و تحویل به مشتری",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "آیا تعمیر این دستگاه با موفقیت انجام شد و دستگاه به مشتری تحویل گردید؟",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 20.sp
+                    )
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                        border = BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("دستگاه: ${order.resolvedCategory} - ${order.resolvedBrand} ${order.model ?: ""}", fontSize = 12.sp, color = Color(0xFF166534))
+                            Text("وضعیت کمیسیون: پیش‌تر با موفقیت تسویه و تایید شده است ✅", fontSize = 11.sp, color = Color(0xFF15803D), fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (orderId.isBlank()) return@Button
+                        isSubmittingComplete = true
+                        viewModel.updateOrderStatus(orderId, "completed") { success, err ->
+                            isSubmittingComplete = false
+                            if (success) {
+                                showCompleteOrderDialog = null
+                                Toast.makeText(context, "سفارش با موفقیت به پایان رسید و بایگانی شد ✅", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, err ?: "خطا در اتمام سفارش", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    enabled = !isSubmittingComplete,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    if (isSubmittingComplete) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Text("بله، اتمام و بایگانی کار ✅", fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showCompleteOrderDialog = null },
+                    enabled = !isSubmittingComplete
+                ) {
+                    Text("انصراف")
+                }
+            }
+        )
+    }
+
+    // Dialog for Technician to Pay 15% Commission (Card to Card) and Unlock Customer Contact Info
+    if (showUnlockOrderDialog != null) {
+        val order = showUnlockOrderDialog!!
+        val orderId = order.resolvedOrderId.ifBlank { order.order_id ?: order.id ?: "" }
+        val estCost = listOfNotNull(order.estimated_cost, order.estimatedCost, order.amount, order.price, order.cost).firstOrNull { it > 0 } ?: 300000L
+        val commissionAmount = (estCost * 0.15).toLong().coerceAtLeast(35000L)
+        val formattedEstCost = NumberFormat.getNumberInstance(Locale.US).format(estCost)
+        val formattedCommission = NumberFormat.getNumberInstance(Locale.US).format(commissionAmount)
+
+        val cardNum = bankCardInfo?.cardNumber ?: bankCardInfo?.card_number ?: "۶۱۰۴-۳۳۸۹-۶۱۱۲-۶۶۶۷"
+        val cardHolderName = bankCardInfo?.cardHolder ?: bankCardInfo?.card_holder ?: "مهدی عباسی (کدیار۲۴)"
+        val bankName = bankCardInfo?.bankName ?: bankCardInfo?.bank_name ?: "بانک ملت"
+
+        AlertDialog(
+            onDismissRequest = { if (!isSubmittingUnlock) showUnlockOrderDialog = null },
+            icon = {
+                Icon(Icons.Default.Lock, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(36.dp))
+            },
+            title = {
+                Text(
+                    text = "مشاهده مشتری و پرداخت کمیسیون (۱۵٪)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "همانند سامانه‌های آچاره و خدمت‌ازما، جهت دریافت شماره تماس، آدرس دقیق و پذیرش این سفارش، مبلغ کمیسیون را به شماره کارت زیر کارت‌به‌کارت نمایید و کد رهگیری فیش را وارد کنید:",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 18.sp
+                    )
+
+                    // Order Summary & Commission Calculation
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
+                        border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("دستگاه:", fontSize = 11.5.sp, color = Color(0xFF92400E))
+                                Text("${order.resolvedCategory} ${order.resolvedBrand}", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF78350F))
+                            }
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("اجرت برآوردی کار:", fontSize = 11.5.sp, color = Color(0xFF92400E))
+                                Text("$formattedEstCost تومان", fontSize = 11.5.sp, fontWeight = FontWeight.Bold, color = Color(0xFF78350F))
+                            }
+                            Divider(color = Color(0xFFFDE68A), thickness = 0.8.dp)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("مبلغ کمیسیون واریزی (۱۵٪):", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB45309))
+                                Text("$formattedCommission تومان", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFB45309))
+                            }
+                        }
+                    }
+
+                    // Bank Card Info Box with Copy Button
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0FDF4)),
+                        border = BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("شماره کارت جهت واریز کمیسیون:", fontSize = 11.sp, color = Color(0xFF166534))
+                                    Text(
+                                        text = cardNum,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF15803D),
+                                        letterSpacing = 1.sp
+                                    )
+                                    Text(
+                                        text = "$cardHolderName - $bankName",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF166534)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clip = ClipData.newPlainText("Card Number", cardNum.replace("-", "").replace(" ", ""))
+                                        clipboard.setPrimaryClip(clip)
+                                        Toast.makeText(context, "شماره کارت کپی شد", Toast.LENGTH_SHORT).show()
+                                    }
+                                ) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "کپی شماره کارت", tint = Color(0xFF16A34A))
+                                }
+                            }
+                        }
+                    }
+
+                    // Inputs for Tracking Code & Depositor
+                    OutlinedTextField(
+                        value = trackingNumberInput,
+                        onValueChange = { trackingNumberInput = it },
+                        label = { Text("شماره پیگیری / کد رهگیری واریز *") },
+                        placeholder = { Text("مثلاً 12345678") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = depositorNameInput,
+                        onValueChange = { depositorNameInput = it },
+                        label = { Text("نام و نام‌خانوادگی صاحب کارت واریزکننده") },
+                        placeholder = { Text("مثلاً علی رضایی") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (orderId.isBlank()) return@Button
+                        if (trackingNumberInput.isBlank() || trackingNumberInput.length < 4) {
+                            Toast.makeText(context, "لطفاً کد رهگیری فیش واریز را وارد فرمایید.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        isSubmittingUnlock = true
+                        viewModel.unlockOrderWithCommission(
+                            order = order,
+                            trackingCode = trackingNumberInput.trim(),
+                            depositorName = depositorNameInput.trim(),
+                            commissionAmount = commissionAmount
+                        ) { success, err ->
+                            isSubmittingUnlock = false
+                            if (success) {
+                                showUnlockOrderDialog = null
+                                trackingNumberInput = ""
+                                Toast.makeText(context, "کمیسیون ثبت شد و اطلاعات مشتری با موفقیت آزاد شد! 🔓", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, err ?: "خطا در ثبت واریز کمیسیون", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    enabled = !isSubmittingUnlock && trackingNumberInput.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    if (isSubmittingUnlock) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Text("ثبت فیش و آزادسازی شماره مشتری 🔓", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showUnlockOrderDialog = null },
+                    enabled = !isSubmittingUnlock
+                ) {
+                    Text("انصراف")
+                }
+            }
+        )
     }
 }

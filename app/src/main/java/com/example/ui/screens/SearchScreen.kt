@@ -387,7 +387,7 @@ fun SearchScreen(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(7.dp)
             ) {
-                items(searchResults) { err ->
+                items(searchResults, key = { it.id ?: "${it.code}_${it.brand}_${it.category}" }) { err ->
                     val severityLevel = err.hazardLevel ?: "medium"
                     val (color, bg, label) = when (severityLevel) {
                         "high" -> Triple(Color(0xFFC0392B), Color(0xFFFDF0EE), "خطرناک")

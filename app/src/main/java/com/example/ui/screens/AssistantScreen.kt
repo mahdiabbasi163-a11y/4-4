@@ -8,6 +8,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -32,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.data.model.*
 import com.example.ui.AssistantViewModel
 
@@ -47,6 +50,12 @@ fun AssistantScreen(
     // Screen navigation state
     // "home", "search", "problems", "store", "profile", "technicians", "orders", "ai_chat"
     var activeTab by remember { mutableStateOf("home") }
+    val visitedTabs = remember { mutableStateListOf("home") }
+    LaunchedEffect(activeTab) {
+        if (!visitedTabs.contains(activeTab)) {
+            visitedTabs.add(activeTab)
+        }
+    }
 
     // Dialog & Sheet states
     var showAuthDialog by remember { mutableStateOf(false) }
@@ -437,17 +446,19 @@ fun AssistantScreen(
 
                                 val animatedScale by animateFloatAsState(
                                     targetValue = if (active) 1.08f else 1.0f,
-                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                                    animationSpec = tween(durationMillis = 150),
                                     label = "iconScale"
                                 )
 
                                 val animatedBgColor by animateColorAsState(
                                     targetValue = if (active) CodyarRed.copy(alpha = 0.12f) else Color.Transparent,
+                                    animationSpec = tween(durationMillis = 150),
                                     label = "bgColor"
                                 )
 
                                 val animatedContentColor by animateColorAsState(
                                     targetValue = if (active) CodyarRed else Color(0xFF64748B),
+                                    animationSpec = tween(durationMillis = 150),
                                     label = "contentColor"
                                 )
 
@@ -457,11 +468,13 @@ fun AssistantScreen(
                                         .clip(RoundedCornerShape(12.dp))
                                         .clickable {
                                             selectedErrorDetail = null
-                                             selectedProblemDetail = null
-                                            if (item.id == "search") {
-                                                viewModel.setShowOnlySaved(false)
+                                            selectedProblemDetail = null
+                                            if (activeTab != item.id) {
+                                                if (item.id == "search" && viewModel.showOnlySaved.value) {
+                                                    viewModel.setShowOnlySaved(false)
+                                                }
+                                                activeTab = item.id
                                             }
-                                            activeTab = item.id
                                         }
                                         .padding(vertical = 2.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -541,121 +554,231 @@ fun AssistantScreen(
                             .fillMaxWidth()
                             .weight(1f)
                     ) {
-                        when (activeTab) {
-                        "home" -> HomeScreen(
-                            viewModel = viewModel,
-                            onNavigateToSearch = { activeTab = "search" },
-                            onNavigateToTechnicians = { activeTab = "technicians" },
-                            onNavigateToStore = { activeTab = "store" },
-                            onShowPlans = { showPlansDialog = true },
-                            onOpenErrorCode = { err ->
-                                if (currentUser == null) {
-                                    showRegisterRequiredDialog = true
-                                } else {
-                                    val viewedSet = viewModel.getUniqueErrorCodesViewed()
-                                    val codeKey = "${err.brand}_${err.category}_${err.code}"
-                                    if (isPremium || viewedSet.contains(codeKey) || viewedSet.size < 2) {
-                                        viewModel.recordErrorCodeView(codeKey)
-                                        selectedErrorDetail = err
+                        if (visitedTabs.contains("home")) {
+                            val isCurrent = activeTab == "home"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                HomeScreen(
+                                    viewModel = viewModel,
+                                    onNavigateToSearch = { activeTab = "search" },
+                                    onNavigateToTechnicians = { activeTab = "technicians" },
+                                    onNavigateToStore = { activeTab = "store" },
+                                    onShowPlans = { showPlansDialog = true },
+                                    onOpenErrorCode = { err ->
+                                        if (currentUser == null) {
+                                            showRegisterRequiredDialog = true
+                                        } else {
+                                            val viewedSet = viewModel.getUniqueErrorCodesViewed()
+                                            val codeKey = "${err.brand}_${err.category}_${err.code}"
+                                            if (isPremium || viewedSet.contains(codeKey) || viewedSet.size < 2) {
+                                                viewModel.recordErrorCodeView(codeKey)
+                                                selectedErrorDetail = err
+                                                activeTab = "search"
+                                            } else {
+                                                showPremiumRequiredDialog = true
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+
+                        if (visitedTabs.contains("search")) {
+                            val isCurrent = activeTab == "search"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                SearchScreen(
+                                    viewModel = viewModel,
+                                    selectedErrorDetail = selectedErrorDetail,
+                                    onSelectError = { err ->
+                                        if (currentUser == null) {
+                                            showRegisterRequiredDialog = true
+                                        } else {
+                                            val viewedSet = viewModel.getUniqueErrorCodesViewed()
+                                            val codeKey = "${err.brand}_${err.category}_${err.code}"
+                                            if (isPremium || viewedSet.contains(codeKey) || viewedSet.size < 2) {
+                                                viewModel.recordErrorCodeView(codeKey)
+                                                selectedErrorDetail = err
+                                            } else {
+                                                showPremiumRequiredDialog = true
+                                            }
+                                        }
+                                    },
+                                    onBack = { selectedErrorDetail = null },
+                                    onNavigateToTechnicians = { activeTab = "technicians" },
+                                    onNavigateToStore = { activeTab = "store" },
+                                    isPremium = isPremium,
+                                    freeErrorCount = freeErrorCount,
+                                    onShowPlans = { showPlansDialog = true }
+                                )
+                            }
+                        }
+
+                        if (visitedTabs.contains("problems")) {
+                            val isCurrent = activeTab == "problems"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                ProblemsScreen(
+                                    viewModel = viewModel,
+                                    liveProblems = viewModel.liveCommonProblems,
+                                    selectedProblemDetail = selectedProblemDetail,
+                                    onSelectProblem = { prob ->
+                                        if (currentUser == null) {
+                                            showRegisterRequiredDialog = true
+                                        } else {
+                                            val viewedSet = viewModel.getUniqueProblemsViewed()
+                                            val problemKey = "${prob.brand}_${prob.category}_${prob.title}"
+                                            if (isPremium || viewedSet.contains(problemKey) || viewedSet.size < 1) {
+                                                viewModel.recordProblemView(problemKey)
+                                                selectedProblemDetail = prob
+                                            } else {
+                                                showPremiumRequiredDialog = true
+                                            }
+                                        }
+                                    },
+                                    onBack = { selectedProblemDetail = null },
+                                    onNavigateToTechnicians = { activeTab = "technicians" },
+                                    onNavigateToStore = { activeTab = "store" },
+                                    isPremium = isPremium,
+                                    freeProblemCount = freeProblemCount,
+                                    onShowPlans = { showPlansDialog = true }
+                                )
+                            }
+                        }
+
+                        if (visitedTabs.contains("store")) {
+                            val isCurrent = activeTab == "store"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                StoreScreen(
+                                    viewModel = viewModel,
+                                    parts = liveSpareParts,
+                                    cartItems = cartItemsList,
+                                    onAddToCart = { viewModel.addToCart(it) }
+                                )
+                            }
+                        }
+
+                        if (visitedTabs.contains("profile")) {
+                            val isCurrent = activeTab == "profile"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                ProfileScreen(
+                                    viewModel = viewModel,
+                                    currentUser = currentUser,
+                                    onShowAuth = {
+                                        authMode = "login"
+                                        showAuthDialog = true
+                                    },
+                                    onShowPlans = { showPlansDialog = true },
+                                    onNavigateToOrders = {
+                                        viewModel.loadRepairs()
+                                        activeTab = "orders"
+                                    },
+                                    onNavigateToSaved = {
+                                        viewModel.setShowOnlySaved(true)
                                         activeTab = "search"
-                                    } else {
-                                        showPremiumRequiredDialog = true
+                                    },
+                                    onShowDisclaimer = {
+                                        showDisclaimerModal = true
                                     }
-                                }
+                                )
                             }
-                        )
-                        "search" -> SearchScreen(
-                            viewModel = viewModel,
-                            selectedErrorDetail = selectedErrorDetail,
-                            onSelectError = { err ->
-                                if (currentUser == null) {
-                                    showRegisterRequiredDialog = true
-                                } else {
-                                    val viewedSet = viewModel.getUniqueErrorCodesViewed()
-                                    val codeKey = "${err.brand}_${err.category}_${err.code}"
-                                    if (isPremium || viewedSet.contains(codeKey) || viewedSet.size < 2) {
-                                        viewModel.recordErrorCodeView(codeKey)
-                                        selectedErrorDetail = err
-                                    } else {
-                                        showPremiumRequiredDialog = true
+                        }
+
+                        if (visitedTabs.contains("technicians")) {
+                            val isCurrent = activeTab == "technicians"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
                                     }
-                                }
-                            },
-                            onBack = { selectedErrorDetail = null },
-                            onNavigateToTechnicians = { activeTab = "technicians" },
-                            onNavigateToStore = { activeTab = "store" },
-                            isPremium = isPremium,
-                            freeErrorCount = freeErrorCount,
-                            onShowPlans = { showPlansDialog = true }
-                        )
-                        "problems" -> ProblemsScreen(
-                            viewModel = viewModel,
-                            liveProblems = viewModel.liveCommonProblems,
-                            selectedProblemDetail = selectedProblemDetail,
-                            onSelectProblem = { prob ->
-                                if (currentUser == null) {
-                                    showRegisterRequiredDialog = true
-                                } else {
-                                    val viewedSet = viewModel.getUniqueProblemsViewed()
-                                    val problemKey = "${prob.brand}_${prob.category}_${prob.title}"
-                                    if (isPremium || viewedSet.contains(problemKey) || viewedSet.size < 1) {
-                                        viewModel.recordProblemView(problemKey)
-                                        selectedProblemDetail = prob
-                                    } else {
-                                        showPremiumRequiredDialog = true
+                            ) {
+                                TechniciansScreen(
+                                    viewModel = viewModel,
+                                    liveTechs = viewModel.liveTechnicians,
+                                    currentUser = currentUser,
+                                    onShowAuth = {
+                                        authMode = "login"
+                                        showAuthDialog = true
                                     }
-                                }
-                            },
-                            onBack = { selectedProblemDetail = null },
-                            onNavigateToTechnicians = { activeTab = "technicians" },
-                            onNavigateToStore = { activeTab = "store" },
-                            isPremium = isPremium,
-                            freeProblemCount = freeProblemCount,
-                            onShowPlans = { showPlansDialog = true }
-                        )
-                        "store" -> StoreScreen(
-                            viewModel = viewModel,
-                            parts = liveSpareParts,
-                            cartItems = cartItemsList,
-                            onAddToCart = { viewModel.addToCart(it) }
-                        )
-                        "profile" -> ProfileScreen(
-                            viewModel = viewModel,
-                            currentUser = currentUser,
-                            onShowAuth = {
-                                authMode = "login"
-                                showAuthDialog = true
-                            },
-                            onShowPlans = { showPlansDialog = true },
-                            onNavigateToOrders = {
-                                viewModel.loadRepairs()
-                                activeTab = "orders"
-                            },
-                            onNavigateToSaved = {
-                                viewModel.setShowOnlySaved(true)
-                                activeTab = "search"
-                            },
-                            onShowDisclaimer = {
-                                showDisclaimerModal = true
+                                )
                             }
-                        )
-                        "technicians" -> TechniciansScreen(
-                            viewModel = viewModel,
-                            liveTechs = viewModel.liveTechnicians,
-                            currentUser = currentUser,
-                            onShowAuth = {
-                                authMode = "login"
-                                showAuthDialog = true
+                        }
+
+                        if (visitedTabs.contains("orders")) {
+                            val isCurrent = activeTab == "orders"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                OrdersScreen(
+                                    viewModel = viewModel,
+                                    repairOrders = repairOrders,
+                                    isRepairsLoading = isRepairsLoading,
+                                    onBack = { activeTab = "profile" },
+                                    onNavigateToTechs = { activeTab = "technicians" }
+                                )
                             }
-                        )
-                        "orders" -> OrdersScreen(
-                            viewModel = viewModel,
-                            repairOrders = repairOrders,
-                            isRepairsLoading = isRepairsLoading,
-                            onBack = { activeTab = "profile" },
-                            onNavigateToTechs = { activeTab = "technicians" }
-                        )
-                        "ai_chat" -> AiChatScreen(viewModel = viewModel)
+                        }
+
+                        if (visitedTabs.contains("ai_chat")) {
+                            val isCurrent = activeTab == "ai_chat"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (isCurrent) 1f else 0f)
+                                    .graphicsLayer {
+                                        alpha = if (isCurrent) 1f else 0f
+                                        translationX = if (isCurrent) 0f else -20000f
+                                    }
+                            ) {
+                                AiChatScreen(viewModel = viewModel)
+                            }
+                        }
                     }
                 }
             }
@@ -920,5 +1043,4 @@ fun AssistantScreen(
             }
         }
     }
-}
 }

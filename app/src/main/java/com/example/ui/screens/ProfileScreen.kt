@@ -140,15 +140,16 @@ fun ProfileScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (isTech) {
+                                    val isSuspended = currentUser.isSuspended
                                     Surface(
-                                        color = if (isApprovedTech) Color(0xFFDCFCE7) else Color(0xFFFEF3C7),
+                                        color = if (isSuspended) Color(0xFFFEE2E2) else if (isApprovedTech) Color(0xFFDCFCE7) else Color(0xFFFEF3C7),
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
                                         Text(
-                                            text = if (isApprovedTech) "👨‍🔧 تکنسین تاییدشده" else "⏳ در انتظار تایید مدارک",
+                                            text = if (isSuspended) "⛔ حساب معلق شده" else if (isApprovedTech) "👨‍🔧 تکنسین تاییدشده" else "⏳ در انتظار تایید مدارک",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (isApprovedTech) Color(0xFF166534) else Color(0xFF92400E),
+                                            color = if (isSuspended) Color(0xFF991B1B) else if (isApprovedTech) Color(0xFF166534) else Color(0xFF92400E),
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                         )
                                     }
@@ -209,7 +210,7 @@ fun ProfileScreen(
                         }
                     }
 
-                    if (isTech) {
+                    if (isTech && isApprovedTech) {
                         val isTechnicianOnline by viewModel.isTechnicianOnline.collectAsState()
                         val isTechStatusUpdating by viewModel.isTechStatusUpdating.collectAsState()
 
@@ -283,48 +284,7 @@ fun ProfileScreen(
                         }
                     }
 
-                    if (isTech && currentUser.hasCommissionDebt) {
-                        val debtAmount = currentUser.resolvedDebt
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
-                            border = BorderStroke(1.dp, Color(0xFFFECACA)),
-                            shape = RoundedCornerShape(9.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Text("💳", fontSize = 18.sp)
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "بدهی کمیسیون سفارش‌های قبلی",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF991B1B)
-                                        )
-                                        Text(
-                                            text = if (debtAmount > 0) "مبلغ: ${formatToman(debtAmount)} تومان (کیف پول منفی)" else "نیازمند تسویه کمیسیون ۱۵٪",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFFDC2626),
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                                Button(
-                                    onClick = {
-                                        viewModel.openCommissionSettlement(context)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text("تسویه آنلاین کمیسیون (درگاه بانکی)", fontSize = 12.sp, color = Color.White)
-                                }
-                            }
-                        }
-                    }
+
 
                     if (isPremium) {
                         Card(

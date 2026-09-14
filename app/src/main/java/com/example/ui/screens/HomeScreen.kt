@@ -498,6 +498,18 @@ fun HomeScreen(
             Color(0xFF06B6D4)  // Cyan
         )
 
+        val recommendingTechsMap = remember(liveTechs, displayCategories) {
+            displayCategories.associateWith { cat ->
+                val matchingTechs = liveTechs.filter { it.resolvedCategories.any { specialty -> specialty.contains(cat, ignoreCase = true) || cat.contains(specialty, ignoreCase = true) } }
+                matchingTechs.maxByOrNull { tech ->
+                    val orders = tech.completedOrders ?: 0
+                    val rating = tech.rating ?: 0.0
+                    val satisfaction = tech.satisfactionRate ?: 0
+                    (orders * 100) + (rating * 50).toInt() + satisfaction
+                }
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -506,20 +518,7 @@ fun HomeScreen(
         ) {
             displayCategories.forEachIndexed { index, cat ->
                 val cardColor = categoryColors[index % categoryColors.size]
-                
-                val recommendingTech = remember(liveTechs, cat) {
-                    val matchingTechs = liveTechs.filter { it.resolvedCategories.any { specialty -> specialty.contains(cat, ignoreCase = true) || cat.contains(specialty, ignoreCase = true) } }
-                    if (matchingTechs.isNotEmpty()) {
-                        matchingTechs.maxByOrNull { tech ->
-                            val orders = tech.completedOrders ?: 0
-                            val rating = tech.rating ?: 0.0
-                            val satisfaction = tech.satisfactionRate ?: 0
-                            (orders * 100) + (rating * 50).toInt() + satisfaction
-                        }
-                    } else {
-                        null
-                    }
-                }
+                val recommendingTech = recommendingTechsMap[cat]
                 
                 val techName = recommendingTech?.name ?: "تکنسین کدیار"
                 val avatarUrl = recommendingTech?.resolvedAvatarUrl
@@ -727,6 +726,8 @@ fun HomeScreen(
             }
         }
 
+        val topErrors = remember(liveErrorCodes) { liveErrorCodes.take(5) }
+
         // List of top 5 errors
         Column(
             modifier = Modifier
@@ -734,7 +735,7 @@ fun HomeScreen(
                 .padding(horizontal = 14.dp),
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
-            liveErrorCodes.take(5).forEach { err ->
+            topErrors.forEach { err ->
                 val severityLevel = err.hazardLevel ?: "medium"
                 val (color, bg, label) = when (severityLevel) {
                     "high" -> Triple(Color(0xFFC0392B), Color(0xFFFDF0EE), "خطرناک")

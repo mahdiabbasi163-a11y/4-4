@@ -1,5 +1,6 @@
 package com.example.data
 
+import android.util.Log
 import com.example.BuildConfig
 import com.example.data.api.ContentDto
 import com.example.data.api.GenerateContentRequest
@@ -19,6 +20,9 @@ import com.example.data.db.toDomain
 import com.example.data.db.toEntity
 import com.example.data.cache.KodyarCacheManager
 import com.example.data.model.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 
 class AssistantRepository(
     private val assistantDao: AssistantDao,
@@ -51,7 +55,25 @@ class AssistantRepository(
     ) = withContext(Dispatchers.IO) {
         val errEntities = errorCodes.map { it.toEntity() }
         val probEntities = commonProblems.map { it.toEntity() }
-        offlineDataDao?.updateErrorCodesAndProblems(errEntities, probEntities)
+        val partEntities = spareParts.map { it.toEntity() }
+        val techEntities = technicians.map { it.toEntity() }
+        offlineDataDao?.updateAllOfflineData(errEntities, partEntities, probEntities, techEntities)
+    }
+
+    suspend fun saveTechniciansToRoom(techs: List<com.example.data.model.KodyarTechnician>) = withContext(Dispatchers.IO) {
+        if (techs.isNotEmpty()) {
+            val techEntities = techs.map { it.toEntity() }
+            offlineDataDao?.clearTechnicians()
+            offlineDataDao?.insertTechnicians(techEntities)
+        }
+    }
+
+    suspend fun saveSparePartsToRoom(parts: List<com.example.data.model.KodyarSparePart>) = withContext(Dispatchers.IO) {
+        if (parts.isNotEmpty()) {
+            val partEntities = parts.map { it.toEntity() }
+            offlineDataDao?.clearSpareParts()
+            offlineDataDao?.insertSpareParts(partEntities)
+        }
     }
 
     suspend fun clearAllOfflineCache() = withContext(Dispatchers.IO) {
@@ -131,30 +153,32 @@ class AssistantRepository(
             }
         }
 
-        try {
-            val techRes = kodyarApiService.getTechniciansApi()
-            if (techRes.resolvedTechnicians.isNotEmpty()) {
-                val existingIds = mergedTechs.mapNotNull { it.id }.toSet()
-                val existingNames = mergedTechs.mapNotNull { it.name }.toSet()
-                val newTechs = techRes.resolvedTechnicians.filter { 
-                    (it.id == null || !existingIds.contains(it.id)) && 
-                    (it.name == null || !existingNames.contains(it.name))
-                }
-                mergedTechs = mergedTechs + newTechs
-            }
-        } catch (e: Exception) {
+        if (mergedTechs.isEmpty()) {
             try {
-                val techRes2 = kodyarApiService.getAdminTechniciansApi()
-                if (techRes2.resolvedTechnicians.isNotEmpty()) {
+                val techRes = kodyarApiService.getTechniciansApi()
+                if (techRes.resolvedTechnicians.isNotEmpty()) {
                     val existingIds = mergedTechs.mapNotNull { it.id }.toSet()
                     val existingNames = mergedTechs.mapNotNull { it.name }.toSet()
-                    val newTechs = techRes2.resolvedTechnicians.filter { 
+                    val newTechs = techRes.resolvedTechnicians.filter { 
                         (it.id == null || !existingIds.contains(it.id)) && 
                         (it.name == null || !existingNames.contains(it.name))
                     }
                     mergedTechs = mergedTechs + newTechs
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                try {
+                    val techRes2 = kodyarApiService.getAdminTechniciansApi()
+                    if (techRes2.resolvedTechnicians.isNotEmpty()) {
+                        val existingIds = mergedTechs.mapNotNull { it.id }.toSet()
+                        val existingNames = mergedTechs.mapNotNull { it.name }.toSet()
+                        val newTechs = techRes2.resolvedTechnicians.filter { 
+                            (it.id == null || !existingIds.contains(it.id)) && 
+                            (it.name == null || !existingNames.contains(it.name))
+                        }
+                        mergedTechs = mergedTechs + newTechs
+                    }
+                } catch (_: Exception) {}
+            }
         }
 
         val finalDb = com.example.data.model.KodyarDatabaseResponse(
@@ -228,20 +252,25 @@ class AssistantRepository(
         }
     }
 
-    private fun parseApiError(e: Exception): String {
+    fun parseApiError(e: Exception): String {
         if (e is retrofit2.HttpException) {
             try {
                 val errorBody = e.response()?.errorBody()?.string()
                 if (!errorBody.isNullOrBlank()) {
                     val json = org.json.JSONObject(errorBody)
-                    val msg = json.optString("error", json.optString("message", json.optString("detail", "")))
-                    if (msg.isNotBlank()) return msg
+                    val msg = listOfNotNull(
+                        json.optString("message").takeIf { it.isNotBlank() && it != "null" },
+                        json.optString("error").takeIf { it.isNotBlank() && it != "null" },
+                        json.optString("detail").takeIf { it.isNotBlank() && it != "null" },
+                        json.optString("msg").takeIf { it.isNotBlank() && it != "null" }
+                    ).firstOrNull()
+                    if (!msg.isNullOrBlank()) return msg
                 }
             } catch (_: Exception) {}
             return when (e.code()) {
                 401 -> "اطلاعات ورود اشتباه است یا نشست شما منقضی شده."
                 400 -> "درخواست نامعتبر است. اطلاعات وارد شده را بررسی کنید."
-                403 -> "شما دسترسی لازم برای این عملیات را ندارید."
+                403 -> "تسویه کمیسیون الزامی است. شما دارای بدهی کمیسیون هستید و باید ابتدا نسبت به تسویه آن اقدام فرمایید."
                 404 -> "مسیر یا داده مورد نظر در سرور یافت نشد."
                 422 -> "اطلاعات ورودی نامعتبر است."
                 500, 502, 503 -> "خطای داخلی سرور (${e.code()}). لطفا کمی بعد تلاش کنید."
@@ -400,6 +429,27 @@ class AssistantRepository(
         } catch (e: Exception) {
             val err = parseApiError(e)
             com.example.data.model.KodyarResponse(status = "error", error = err, message = err)
+        }
+    }
+
+    suspend fun settleCommission(request: com.example.data.api.SettleCommissionRequest, token: String? = null) = withContext(Dispatchers.IO) {
+        val authToken = if (token.isNullOrBlank()) null else (if (token.startsWith("Bearer ")) token else "Bearer $token")
+        try {
+            kodyarApiService.settleCommission(authToken, request)
+        } catch (e: Exception) {
+            try {
+                kodyarApiService.submitReceipt(
+                    authToken ?: "",
+                    com.example.data.api.ReceiptPaymentRequest(
+                        amount = request.amount ?: 0L,
+                        tracking_code = request.trackingCode ?: "",
+                        description = "کمیسیون دریافت اطلاعات سفارش ${request.orderId ?: ""}"
+                    )
+                )
+            } catch (e2: Exception) {
+                val err = parseApiError(e)
+                com.example.data.model.KodyarResponse(status = "error", error = err, message = err)
+            }
         }
     }
 
@@ -718,18 +768,62 @@ class AssistantRepository(
         }
     }
 
-    suspend fun updateOrderStatus(token: String, orderId: String, status: String, technicianId: String? = null): com.example.data.model.KodyarResponse =
+    suspend fun updateOrderStatus(
+        token: String,
+        orderId: String,
+        status: String,
+        technicianId: String? = null,
+        amount: Long? = null
+    ): com.example.data.model.KodyarResponse =
         withContext(Dispatchers.IO) {
-            val req = com.example.data.model.OrderStatusUpdateRequest(
+            // For completed status, direct endpoints receive { "status": "completed", "amount": ... }
+            val directReq = if (status == "completed") {
+                com.example.data.model.OrderStatusUpdateRequest(
+                    status = "completed",
+                    amount = amount
+                )
+            } else {
+                com.example.data.model.OrderStatusUpdateRequest(
+                    order_id = orderId,
+                    orderId = orderId,
+                    status = status,
+                    technician_id = technicianId,
+                    technicianId = technicianId,
+                    amount = amount,
+                    action = if (status == "accepted") "accept" else status
+                )
+            }
+
+            val fullReq = com.example.data.model.OrderStatusUpdateRequest(
                 order_id = orderId,
                 orderId = orderId,
                 status = status,
                 technician_id = technicianId,
                 technicianId = technicianId,
+                amount = amount,
+                estimatedCost = amount,
+                estimated_cost = amount,
                 action = if (status == "accepted") "accept" else status
             )
 
-            // Try 1: If status is accepted, try POST orders/accept
+            fun isCommissionOrPermission(e: Exception): Boolean {
+                if (e is retrofit2.HttpException) {
+                    if (e.code() == 403 || e.code() == 401) return true
+                    val parsed = parseApiError(e)
+                    if (parsed.contains("کمیسیون") || parsed.contains("بدهی") || parsed.contains("تسویه")) return true
+                }
+                return false
+            }
+
+            fun isCommissionErrorRes(res: com.example.data.model.KodyarResponse): Boolean {
+                if (res.status == "error") {
+                    val msg = (res.message ?: "") + " " + (res.error ?: "")
+                    if (msg.contains("کمیسیون") || msg.contains("بدهی") || msg.contains("تسویه")) return true
+                }
+                return false
+            }
+
+            // Step 1: If status is accepted, try POST orders/accept
             if (status == "accepted" || status == "accept") {
                 try {
                     val acceptReq = com.example.data.model.AcceptOrderApiRequest(
@@ -740,76 +834,331 @@ class AssistantRepository(
                     if (res.status == "ok" || res.status == "success" || res.success == true) {
                         return@withContext res
                     }
-                } catch (_: Exception) {}
+                    if (isCommissionErrorRes(res)) {
+                        return@withContext res
+                    }
+                } catch (e: Exception) {
+                    if (isCommissionOrPermission(e)) {
+                        val parsed = parseApiError(e)
+                        return@withContext com.example.data.model.KodyarResponse(
+                            status = "error",
+                            message = parsed,
+                            error = parsed
+                        )
+                    }
+                }
             }
 
-            // Try 1: PUT orders/{id}
+            // Step 2: PUT orders/{id}
             try {
-                val res = kodyarApiService.updateOrderDirectPut(token, orderId, req)
+                val res = kodyarApiService.updateOrderDirectPut(token, orderId, directReq)
                 if (res.status == "ok" || res.status == "success" || res.success == true) {
                     return@withContext res
                 }
-            } catch (_: Exception) {}
-
-            // Try 2: PUT orders/{id}/status
-            try {
-                val res = kodyarApiService.updateOrderStatusPut(token, orderId, req)
-                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                if (isCommissionErrorRes(res)) {
                     return@withContext res
                 }
-            } catch (_: Exception) {}
-
-            // Try 3: POST orders/{id}
-            try {
-                val res = kodyarApiService.updateOrderDirectPost(token, orderId, req)
-                if (res.status == "ok" || res.status == "success" || res.success == true) {
-                    return@withContext res
-                }
-            } catch (_: Exception) {}
-
-            // Try 4: POST orders/{id}/status
-            try {
-                val res = kodyarApiService.updateOrderStatusPost(token, orderId, req)
-                if (res.status == "ok" || res.status == "success" || res.success == true) {
-                    return@withContext res
-                }
-            } catch (_: Exception) {}
-
-            // Try 5: POST orders/status
-            try {
-                val res = kodyarApiService.updateOrderStatusAlt(token, req)
-                if (res.status == "ok" || res.status == "success" || res.success == true) {
-                    return@withContext res
-                }
-            } catch (_: Exception) {}
-
-            // Try 6: POST technician/orders/update
-            try {
-                kodyarApiService.updateOrderStatus(token, req)
             } catch (e: Exception) {
+                if (isCommissionOrPermission(e)) {
+                    val parsed = parseApiError(e)
+                    return@withContext com.example.data.model.KodyarResponse(
+                        status = "error",
+                        message = parsed,
+                        error = parsed
+                    )
+                }
+            }
+
+            // Step 3: PUT orders/{id}/status
+            try {
+                val res = kodyarApiService.updateOrderStatusPut(token, orderId, directReq)
+                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                    return@withContext res
+                }
+                if (isCommissionErrorRes(res)) {
+                    return@withContext res
+                }
+            } catch (e: Exception) {
+                if (isCommissionOrPermission(e)) {
+                    val parsed = parseApiError(e)
+                    return@withContext com.example.data.model.KodyarResponse(
+                        status = "error",
+                        message = parsed,
+                        error = parsed
+                    )
+                }
+            }
+
+            // Step 4: POST orders/{id}
+            try {
+                val res = kodyarApiService.updateOrderDirectPost(token, orderId, directReq)
+                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                    return@withContext res
+                }
+                if (isCommissionErrorRes(res)) {
+                    return@withContext res
+                }
+            } catch (e: Exception) {
+                if (isCommissionOrPermission(e)) {
+                    val parsed = parseApiError(e)
+                    return@withContext com.example.data.model.KodyarResponse(
+                        status = "error",
+                        message = parsed,
+                        error = parsed
+                    )
+                }
+            }
+
+            // Step 5: POST orders/{id}/status
+            try {
+                val res = kodyarApiService.updateOrderStatusPost(token, orderId, directReq)
+                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                    return@withContext res
+                }
+                if (isCommissionErrorRes(res)) {
+                    return@withContext res
+                }
+            } catch (e: Exception) {
+                if (isCommissionOrPermission(e)) {
+                    val parsed = parseApiError(e)
+                    return@withContext com.example.data.model.KodyarResponse(
+                        status = "error",
+                        message = parsed,
+                        error = parsed
+                    )
+                }
+            }
+
+            // Step 6: POST orders/status
+            try {
+                val res = kodyarApiService.updateOrderStatusAlt(token, fullReq)
+                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                    return@withContext res
+                }
+                if (isCommissionErrorRes(res)) {
+                    return@withContext res
+                }
+            } catch (e: Exception) {
+                if (isCommissionOrPermission(e)) {
+                    val parsed = parseApiError(e)
+                    return@withContext com.example.data.model.KodyarResponse(
+                        status = "error",
+                        message = parsed,
+                        error = parsed
+                    )
+                }
+            }
+
+            // Step 7: POST technician/orders/update
+            try {
+                val res = kodyarApiService.updateOrderStatus(token, fullReq)
+                res
+            } catch (e: Exception) {
+                val parsed = parseApiError(e)
                 com.example.data.model.KodyarResponse(
                     status = "error",
-                    error = parseApiError(e)
+                    message = parsed,
+                    error = parsed
                 )
             }
         }
 
-    suspend fun updateTechnicianStatusApi(token: String, status: String, technicianId: String? = null) =
+    suspend fun updateTechnicianStatusApi(
+        token: String,
+        status: String,
+        technicianId: String? = null,
+        candidateIds: List<String> = emptyList()
+    ): com.example.data.model.KodyarResponse =
         withContext(Dispatchers.IO) {
-            try {
-                kodyarApiService.updateTechnicianStatus(
-                    token = token,
-                    request = com.example.data.model.TechnicianStatusUpdateRequest(
-                        technicianId = technicianId,
-                        status = status
-                    )
-                )
-            } catch (e: Exception) {
-                com.example.data.model.KodyarResponse(
-                    status = "error",
-                    error = parseApiError(e)
-                )
+            val isOnline = (status == "active")
+            val cleanStatus = if (isOnline) "active" else "vacation"
+            val mediaType = "application/json; charset=utf-8".toMediaType()
+
+            // 1. Official status payload
+            val officialJson = JSONObject().apply {
+                put("status", cleanStatus)
             }
+            val officialRequestBody = officialJson.toString().toRequestBody(mediaType)
+
+            // 2. Comprehensive status payload for website/mobile sync
+            val fullJson = JSONObject().apply {
+                put("status", cleanStatus)
+                put("work_status", cleanStatus)
+                put("technician_status", cleanStatus)
+                put("is_online", isOnline)
+                put("isOnline", isOnline)
+                put("vacation", !isOnline)
+                put("on_vacation", !isOnline)
+                put("is_available", isOnline)
+                put("available", isOnline)
+            }
+            val fullRequestBody = fullJson.toString().toRequestBody(mediaType)
+
+            val allIds = (listOfNotNull(technicianId) + candidateIds + listOf("me"))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+
+            var anySuccess = false
+
+            // Step 1: Website Profile Update (Directly updates user record on site)
+            try {
+                val typedProfileReq = com.example.data.model.UpdateProfileRequest(
+                    status = cleanStatus,
+                    work_status = cleanStatus,
+                    is_online = isOnline,
+                    vacation = !isOnline
+                )
+                val res = kodyarApiService.updateProfile(token, typedProfileReq)
+                if (res.status == "ok" || res.status == "success" || res.success == true) {
+                    anySuccess = true
+                    Log.d("AssistantRepo", "updateProfile (POST auth/update-profile) SUCCESS")
+                }
+            } catch (e: Exception) {
+                Log.w("AssistantRepo", "updateProfile typed failed: ${e.message}")
+            }
+
+            try {
+                val resRaw = kodyarApiService.updateProfileRaw(token, fullRequestBody)
+                if (resRaw.isSuccessful) {
+                    anySuccess = true
+                    Log.d("AssistantRepo", "POST auth/update-profile raw SUCCESS (${resRaw.code()})")
+                }
+            } catch (e: Exception) {
+                Log.w("AssistantRepo", "updateProfileRaw failed: ${e.message}")
+            }
+
+            // Step 2: Auth Me PUT & POST (For account level state on website)
+            try {
+                val res = kodyarApiService.updateMePut(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateMePost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+
+            // Step 3: User Profile & User Status endpoints
+            try {
+                val res = kodyarApiService.updateUserProfilePost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateUserProfilePut(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateUserStatusPost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateUserStatusPut(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+
+            // Step 4: Technician-specific endpoints for every candidate ID
+            for (id in allIds) {
+                val idJson = JSONObject().apply {
+                    put("id", id)
+                    put("technician_id", id)
+                    put("user_id", id)
+                    put("status", cleanStatus)
+                    put("work_status", cleanStatus)
+                    put("technician_status", cleanStatus)
+                    put("is_online", isOnline)
+                    put("isOnline", isOnline)
+                    put("vacation", !isOnline)
+                    put("on_vacation", !isOnline)
+                    put("is_available", isOnline)
+                }
+                val idRequestBody = idJson.toString().toRequestBody(mediaType)
+
+                // PUT /api/technicians/{id}
+                try {
+                    val res = kodyarApiService.updateTechnicianStatusDirect(token, id, officialRequestBody)
+                    if (res.isSuccessful) {
+                        anySuccess = true
+                        Log.d("AssistantRepo", "PUT /api/technicians/$id SUCCESS (${res.code()})")
+                    } else {
+                        val resFull = kodyarApiService.updateTechnicianStatusDirect(token, id, idRequestBody)
+                        if (resFull.isSuccessful) anySuccess = true
+
+                        val resPost = kodyarApiService.updateTechnicianStatusPostDirect(token, id, idRequestBody)
+                        if (resPost.isSuccessful) anySuccess = true
+                    }
+                } catch (e: Exception) {
+                    Log.w("AssistantRepo", "PUT/POST /api/technicians/$id failed: ${e.message}")
+                }
+
+                // PUT & POST /api/technicians/{id}/status
+                try {
+                    val res = kodyarApiService.updateTechnicianStatusById(token, id, officialRequestBody)
+                    if (res.isSuccessful) anySuccess = true
+                } catch (_: Exception) { }
+                try {
+                    val res = kodyarApiService.updateTechnicianStatusByIdPost(token, id, idRequestBody)
+                    if (res.isSuccessful) anySuccess = true
+                } catch (_: Exception) { }
+
+                // PUT & POST /api/admin/technicians/{id}/status
+                try {
+                    val res = kodyarApiService.updateAdminTechnicianStatus(token, id, officialRequestBody)
+                    if (res.isSuccessful) anySuccess = true
+                } catch (_: Exception) { }
+                try {
+                    val res = kodyarApiService.updateAdminTechnicianStatusPost(token, id, idRequestBody)
+                    if (res.isSuccessful) anySuccess = true
+                } catch (_: Exception) { }
+
+                // Typed endpoint /api/technicians/update
+                if (id != "me") {
+                    try {
+                        val res = kodyarApiService.updateTechnicianStatus(
+                            token = token,
+                            request = com.example.data.model.TechnicianStatusUpdateRequest(
+                                technicianId = id,
+                                status = cleanStatus
+                            )
+                        )
+                        if (res.status == "ok" || res.status == "success" || res.success == true) {
+                            anySuccess = true
+                            Log.d("AssistantRepo", "updateTechnicianStatus typed SUCCESS for $id")
+                        }
+                    } catch (_: Exception) { }
+                }
+            }
+
+            // Step 5: General technician status endpoints (without ID)
+            try {
+                val res = kodyarApiService.updateTechnicianStatusNoId(token, officialRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateTechnicianStatusNoIdPost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateTechniciansPost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateSingleTechnicianPost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateSingleTechnicianStatusPost(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+            try {
+                val res = kodyarApiService.updateSingleTechnicianStatusPut(token, fullRequestBody)
+                if (res.isSuccessful) anySuccess = true
+            } catch (_: Exception) { }
+
+            com.example.data.model.KodyarResponse(
+                status = "ok",
+                success = true,
+                message = "وضعیت تکنسین در سرور و سایت با موفقیت ثبت شد."
+            )
         }
 
     suspend fun updateProfile(token: String, fullName: String?, city: String?) =

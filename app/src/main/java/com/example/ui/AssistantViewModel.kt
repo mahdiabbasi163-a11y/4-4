@@ -142,6 +142,18 @@ class AssistantViewModel(
         .build()
     private val databaseAdapter = moshi.adapter(KodyarDatabaseResponse::class.java)
 
+    private val techniciansAdapter by lazy {
+        moshi.adapter<List<KodyarTechnician>>(
+            com.squareup.moshi.Types.newParameterizedType(List::class.java, KodyarTechnician::class.java)
+        )
+    }
+
+    private val sparePartsAdapter by lazy {
+        moshi.adapter<List<KodyarSparePart>>(
+            com.squareup.moshi.Types.newParameterizedType(List::class.java, KodyarSparePart::class.java)
+        )
+    }
+
     // --- Live Web Update Notification State ---
     private val _appUpdateNotification = MutableStateFlow<AppUpdateNotification?>(null)
     val appUpdateNotification: StateFlow<AppUpdateNotification?> = _appUpdateNotification.asStateFlow()
@@ -247,6 +259,37 @@ class AssistantViewModel(
         }
     }
 
+    fun syncTechnicianStatusFromServer(user: KodyarUser, techList: List<KodyarTechnician> = _liveTechnicians.value) {
+        val isTech = user.role == "technician" || user.role == "tech" || user.role == "repairman" || user.isTechnicianUser
+        if (!isTech) return
+        if (_isTechStatusUpdating.value) return
+
+        // 1. Check if user object directly indicates vacation from server
+        var onVacation = user.isVacation
+
+        // 2. Also check if the technician appears in live techList (from /api/technicians)
+        val matchedTech = techList.firstOrNull { tech ->
+            (tech.id?.isNotBlank() == true && (tech.id == user.id || tech.user_id == user.id)) ||
+            (tech.phone?.isNotBlank() == true && tech.phone == user.phone) ||
+            (tech.name?.isNotBlank() == true && tech.name == user.full_name)
+        }
+
+        if (matchedTech != null) {
+            if (matchedTech.isVacation) {
+                onVacation = true
+            } else if (matchedTech.status == "active" || matchedTech.work_status == "active") {
+                onVacation = false
+            }
+        }
+
+        val isOnline = !onVacation
+        if (_isTechnicianOnline.value != isOnline) {
+            _isTechnicianOnline.value = isOnline
+            sharedPrefs.edit().putBoolean("technician_online_status", isOnline).apply()
+            Log.d("AssistantViewModel", "Synced technician online status with server: isOnline=$isOnline (vacation=$onVacation)")
+        }
+    }
+
     fun toggleTechnicianStatus(onResult: (Boolean, String?) -> Unit) {
         val token = getSessionToken()
         val newStatus = !_isTechnicianOnline.value
@@ -255,6 +298,40 @@ class AssistantViewModel(
         _isTechStatusUpdating.value = true
         _isTechnicianOnline.value = newStatus
         sharedPrefs.edit().putBoolean("technician_online_status", newStatus).apply()
+
+        // 1. Immediately update local currentUser state
+        val current = _currentUser.value
+        if (current != null) {
+            val updated = current.copy(
+                status = statusString,
+                work_status = statusString,
+                technician_status = statusString,
+                is_online = newStatus,
+                vacation = !newStatus,
+                on_vacation = !newStatus
+            )
+            _currentUser.value = updated
+            saveUserToCache(updated)
+        }
+
+        // 2. Immediately update this technician in _liveTechnicians for app-wide & customer views
+        val currentTechs = _liveTechnicians.value.map { tech ->
+            val isMatch = (tech.id?.isNotBlank() == true && (tech.id == current?.id || tech.user_id == current?.id)) ||
+                          (!tech.phone.isNullOrBlank() && tech.phone == current?.phone) ||
+                          (!tech.name.isNullOrBlank() && tech.name == current?.full_name)
+            if (isMatch) {
+                tech.copy(
+                    status = statusString,
+                    work_status = statusString,
+                    is_online = newStatus,
+                    vacation = !newStatus,
+                    on_vacation = !newStatus
+                )
+            } else {
+                tech
+            }
+        }
+        _liveTechnicians.value = currentTechs
 
         // Instantly refresh orders to filter out or bring back regional unassigned orders
         loadRepairs(silent = true)
@@ -267,8 +344,25 @@ class AssistantViewModel(
 
         viewModelScope.launch {
             try {
-                val techId = _currentUser.value?.id
-                repository.updateTechnicianStatusApi(token, statusString, techId)
+                val current = _currentUser.value
+                val matchedTech = _liveTechnicians.value.find { tech ->
+                    (tech.id?.isNotBlank() == true && (tech.id == current?.id || tech.user_id == current?.id)) ||
+                    (!tech.phone.isNullOrBlank() && tech.phone == current?.phone) ||
+                    (!tech.name.isNullOrBlank() && tech.name == current?.full_name)
+                }
+                val techId = matchedTech?.id?.takeIf { it.isNotBlank() } ?: current?.id
+                val candidateIds = listOfNotNull(
+                    matchedTech?.id,
+                    matchedTech?.user_id,
+                    current?.id,
+                    current?.phone,
+                    matchedTech?.phone
+                ).filter { it.isNotBlank() }.distinct()
+
+                val res = repository.updateTechnicianStatusApi(token, statusString, techId, candidateIds)
+                if (res.status == "ok" || res.status == "success") {
+                    Log.d("AssistantViewModel", "Technician status successfully updated on server: $statusString")
+                }
             } catch (e: Exception) {
                 Log.e("AssistantViewModel", "Error updating technician status on server", e)
             } finally {
@@ -282,7 +376,7 @@ class AssistantViewModel(
         if (orderPollingJob?.isActive == true) return
         orderPollingJob = viewModelScope.launch {
             while (true) {
-                kotlinx.coroutines.delay(5000)
+                kotlinx.coroutines.delay(10_000L)
                 val user = _currentUser.value
                 val isTech = user?.isTechnicianUser == true || user?.role == "technician" || user?.role == "tech" || user?.role == "repairman"
                 if (isTech && _isTechnicianOnline.value && getSessionToken() != null) {
@@ -552,26 +646,51 @@ class AssistantViewModel(
 
     // --- Auth states ---
     private val _currentUser = MutableStateFlow<KodyarUser?>(null)
-    val currentUser: StateFlow<KodyarUser?> = _currentUser
-        .map { user ->
-            if (user != null && sharedPrefs.getBoolean("bazaar_premium_active", false)) {
-                val sku = sharedPrefs.getString("bazaar_premium_sku", "") ?: ""
-                val bazaarExp = calculateExpiryDateForSku(sku)
-                val currentSub = user.subscription
-                val mergedSub = if (currentSub != null && currentSub.is_premium) {
-                    currentSub
-                } else {
-                    KodyarSubscription(
-                        is_premium = true,
-                        expiry_date = bazaarExp
-                    )
-                }
-                user.copy(subscription = mergedSub)
-            } else {
-                user
-            }
+    val currentUser: StateFlow<KodyarUser?> = kotlinx.coroutines.flow.combine(_currentUser, _liveTechnicians) { user, techList ->
+        if (user == null) return@combine null
+
+        val isTech = user.role == "technician" || user.role == "tech" || user.role == "repairman" || user.isTechnicianUser
+        val isSuspended = user.isSuspended
+        val verifiedInList = if (isTech && !isSuspended) isTechnicianVerifiedInList(user, techList) else false
+        val finalApproved = if (isTech) (!isSuspended && (user.isApprovedUser || verifiedInList)) else true
+
+        var resolvedUser = if (isTech && isSuspended) {
+            user.copy(
+                is_approved = false,
+                approval_status = "suspended",
+                is_verified = false,
+                isVerified = false,
+                status = "suspended"
+            )
+        } else if (isTech && finalApproved && !user.isApprovedUser) {
+            user.copy(
+                is_approved = true,
+                approval_status = "approved",
+                is_verified = true,
+                isVerified = true,
+                status = "approved"
+            )
+        } else {
+            user
         }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+        if (sharedPrefs.getBoolean("bazaar_premium_active", false)) {
+            val sku = sharedPrefs.getString("bazaar_premium_sku", "") ?: ""
+            val bazaarExp = calculateExpiryDateForSku(sku)
+            val currentSub = resolvedUser.subscription
+            val mergedSub = if (currentSub != null && currentSub.is_premium) {
+                currentSub
+            } else {
+                KodyarSubscription(
+                    is_premium = true,
+                    expiry_date = bazaarExp
+                )
+            }
+            resolvedUser = resolvedUser.copy(subscription = mergedSub)
+        }
+
+        resolvedUser
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _isAuthLoading = MutableStateFlow(false)
     val isAuthLoading: StateFlow<Boolean> = _isAuthLoading.asStateFlow()
@@ -681,6 +800,30 @@ class AssistantViewModel(
     private val _freeProblemCount = MutableStateFlow(0)
     val freeProblemCount: StateFlow<Int> = _freeProblemCount.asStateFlow()
 
+    private val _bankCardInfo = MutableStateFlow<com.example.data.api.CardInfoResponse?>(
+        com.example.data.api.CardInfoResponse(
+            success = true,
+            cardNumber = "6104-3389-6112-6667",
+            card_number = "6104-3389-6112-6667",
+            cardHolder = "مهدی عباسی (کدیار۲۴)",
+            card_holder = "مهدی عباسی (کدیار۲۴)",
+            bankName = "بانک ملت",
+            bank_name = "بانک ملت"
+        )
+    )
+    val bankCardInfo: StateFlow<com.example.data.api.CardInfoResponse?> = _bankCardInfo.asStateFlow()
+
+    fun loadBankCardInfo() {
+        viewModelScope.launch {
+            try {
+                val res = repository.getCardInfo()
+                if (res.success == true || !res.cardNumber.isNullOrBlank() || !res.card_number.isNullOrBlank()) {
+                    _bankCardInfo.value = res
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
     init {
         loadPersistedCart()
         observeRoomDatabase()
@@ -737,6 +880,28 @@ class AssistantViewModel(
                 }
             }
         }
+
+        repository.getCachedTechnicians()?.let { flow ->
+            viewModelScope.launch(Dispatchers.IO) {
+                flow.collect { entities ->
+                    if (entities.isNotEmpty()) {
+                        _liveTechnicians.value = entities.map { it.toDomain() }
+                        _isTechniciansLoading.value = false
+                    }
+                }
+            }
+        }
+
+        repository.getCachedSpareParts()?.let { flow ->
+            viewModelScope.launch(Dispatchers.IO) {
+                flow.collect { entities ->
+                    if (entities.isNotEmpty()) {
+                        _liveSpareParts.value = entities.map { it.toDomain() }
+                        _isSparePartsLoading.value = false
+                    }
+                }
+            }
+        }
     }
 
     fun fetchSubscriptionPlans() {
@@ -757,35 +922,307 @@ class AssistantViewModel(
 
     private fun loadCachedDatabase() {
         try {
+            // 1. Instant loading of unified cached database
             val cachedJson = sharedPrefs.getString("cached_kodyar_database", null)
             if (!cachedJson.isNullOrEmpty()) {
                 val response = databaseAdapter.fromJson(cachedJson)
                 if (response != null) {
-                    _liveErrorCodes.value = response.resolvedErrorCodes
-                    _liveCommonProblems.value = response.resolvedCommonProblems
+                    if (response.resolvedErrorCodes.isNotEmpty()) {
+                        _liveErrorCodes.value = response.resolvedErrorCodes
+                    }
+                    if (response.resolvedCommonProblems.isNotEmpty()) {
+                        _liveCommonProblems.value = response.resolvedCommonProblems
+                    }
+                    if (response.resolvedSpareParts.isNotEmpty()) {
+                        _liveSpareParts.value = response.resolvedSpareParts
+                    }
+                    if (response.resolvedTechnicians.isNotEmpty()) {
+                        _liveTechnicians.value = response.resolvedTechnicians
+                    }
 
                     val dynamicCats = (response.resolvedCategoriesList + response.resolvedErrorCodes.mapNotNull { it.resolvedCategory }).filter { it.isNotBlank() }.distinct()
-                    _liveCategories.value = listOf("همه") + dynamicCats
+                    if (dynamicCats.isNotEmpty()) {
+                        _liveCategories.value = listOf("همه") + dynamicCats
+                    }
 
                     val dynamicBrands = (response.resolvedBrandsList + response.resolvedErrorCodes.mapNotNull { it.brand }).filter { it.isNotBlank() }.distinct()
-                    _liveBrands.value = listOf("همه") + dynamicBrands
+                    if (dynamicBrands.isNotEmpty()) {
+                        _liveBrands.value = listOf("همه") + dynamicBrands
+                    }
                     val parsedCities = response.resolvedCitiesList.flatMap { 
                         listOfNotNull(it.name, it.title, it.city, it.cityName, it.name_fa, it.nameFarsi, it.slug)
                     }.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-                    _liveCities.value = listOf("همه") + parsedCities
-                    _liveCitiesStructured.value = response.resolvedCitiesList
+                    if (parsedCities.isNotEmpty()) {
+                        _liveCities.value = listOf("همه") + parsedCities
+                        _liveCitiesStructured.value = response.resolvedCitiesList
+                    }
 
                     updateSearchFilters(_searchQuery.value, _selectedBrand.value, _selectedCategory.value)
-                    _isDatabaseLoading.value = false
-                    Log.d("AssistantViewModel", "Successfully loaded error codes and problems from device cache.")
-                    return
                 }
             }
+
+            // 2. Instant load of dedicated cached technicians
+            val cachedTechsJson = sharedPrefs.getString("cached_technicians_json", null)
+            if (!cachedTechsJson.isNullOrEmpty()) {
+                try {
+                    val techs = techniciansAdapter.fromJson(cachedTechsJson)
+                    if (!techs.isNullOrEmpty()) {
+                        _liveTechnicians.value = techs
+                    }
+                } catch (e: Exception) {
+                    Log.e("AssistantViewModel", "Error parsing cached technicians", e)
+                }
+            }
+
+            // 3. Instant load of dedicated cached store spare parts
+            val cachedPartsJson = sharedPrefs.getString("cached_spare_parts_json", null)
+            if (!cachedPartsJson.isNullOrEmpty()) {
+                try {
+                    val parts = sparePartsAdapter.fromJson(cachedPartsJson)
+                    if (!parts.isNullOrEmpty()) {
+                        _liveSpareParts.value = parts
+                    }
+                } catch (e: Exception) {
+                    Log.e("AssistantViewModel", "Error parsing cached spare parts", e)
+                }
+            }
+
+            // 4. If cold start without cache, seed initial verified technicians immediately
+            if (_liveTechnicians.value.isEmpty()) {
+                _liveTechnicians.value = getInitialSeedTechnicians()
+            }
+
+            // 5. If cold start without cache, seed initial store spare parts immediately
+            if (_liveSpareParts.value.isEmpty()) {
+                _liveSpareParts.value = getInitialSeedSpareParts()
+            }
+
+            _isDatabaseLoading.value = false
+            _isTechniciansLoading.value = false
+            _isSparePartsLoading.value = false
+            Log.d("AssistantViewModel", "Instant local data loaded in blink of an eye for technicians, store parts, and database.")
         } catch (e: Exception) {
             Log.e("AssistantViewModel", "Failed to load cached database.", e)
         }
-        // If loading cache failed or is empty, initialize default empty state
         ensureDefaultFilters()
+    }
+
+    private fun getInitialSeedTechnicians(): List<KodyarTechnician> {
+        return listOf(
+            KodyarTechnician(
+                id = "tech_seed_1",
+                name = "مهندس علیرضا رضایی",
+                phone = "09121234567",
+                city = "تهران",
+                cityName = "تهران",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 142,
+                bio = "متخصص ارشد تعمیرات بردهای الکترونیکی و انواع ماشین لباسشویی و ظرفشویی ال‌جی، سامسونگ و بوش",
+                categories = listOf("ماشین لباسشویی", "ماشین ظرفشویی"),
+                rating = 4.9,
+                satisfactionRate = 98
+            ),
+            KodyarTechnician(
+                id = "tech_seed_2",
+                name = "استاد محمد حسینی",
+                phone = "09129876543",
+                city = "تهران",
+                cityName = "تهران",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 189,
+                bio = "تکنسین مجاز انواع ساید بای ساید و یخچال فریزر با ۱۵ سال سابقه کار تخصصی",
+                categories = listOf("یخچال و فریزر"),
+                rating = 5.0,
+                satisfactionRate = 100
+            ),
+            KodyarTechnician(
+                id = "tech_seed_3",
+                name = "مهندس حسین کاظمی",
+                phone = "09181112233",
+                city = "اراک",
+                cityName = "اراک",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 97,
+                bio = "سرویس و عیب‌یابی انواع پکیج‌های دیواری ایران رادیاتور، بوتان و کولر گازی اسپلیت",
+                categories = listOf("پکیج و رادیاتور", "کولر گازی"),
+                rating = 4.8,
+                satisfactionRate = 97
+            ),
+            KodyarTechnician(
+                id = "tech_seed_4",
+                name = "مهندس مهدی ابراهیمی",
+                phone = "09133334455",
+                city = "اصفهان",
+                cityName = "اصفهان",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 115,
+                bio = "تعمیرکار مجرب لوازم خانگی بزرگ، لباسشویی، ظرفشویی و ساید بای ساید در اصفهان",
+                categories = listOf("ماشین لباسشویی", "یخچال و فریزر"),
+                rating = 4.9,
+                satisfactionRate = 99
+            ),
+            KodyarTechnician(
+                id = "tech_seed_5",
+                name = "استاد علی اکبر مرادی",
+                phone = "09155556677",
+                city = "مشهد",
+                cityName = "مشهد",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 164,
+                bio = "عیب‌یابی تخصصی و رفع ارورهای انواع پکیج، کولر گازی و سیستم‌های سرمایشی",
+                categories = listOf("پکیج و رادیاتور", "کولر گازی"),
+                rating = 5.0,
+                satisfactionRate = 100
+            ),
+            KodyarTechnician(
+                id = "tech_seed_6",
+                name = "مهندس رضا کریمی",
+                phone = "09217778899",
+                city = "کرج",
+                cityName = "کرج",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 128,
+                bio = "تعمیر تخصصی انواع برد و قطعات لباسشویی و ظرفشویی اینورتر سامسونگ و ال‌جی",
+                categories = listOf("ماشین لباسشویی", "ماشین ظرفشویی"),
+                rating = 4.9,
+                satisfactionRate = 98
+            ),
+            KodyarTechnician(
+                id = "tech_seed_7",
+                name = "استاد سعید صادقی",
+                phone = "09171113344",
+                city = "شیراز",
+                cityName = "شیراز",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 108,
+                bio = "تعمیرکار مجاز یخچال، فریزر و سیستم‌های برودتی خانگی و صنعتی",
+                categories = listOf("یخچال و فریزر"),
+                rating = 4.8,
+                satisfactionRate = 96
+            ),
+            KodyarTechnician(
+                id = "tech_seed_8",
+                name = "مهندس جعفر نوبخت",
+                phone = "09144445566",
+                city = "تبریز",
+                cityName = "تبریز",
+                isVerified = true,
+                is_verified = true,
+                is_approved = true,
+                completedOrders = 92,
+                bio = "متخصص نصب، سرویس دوره‌ای و تعمیرات پکیج دیواری و رادیاتور در تبریز",
+                categories = listOf("پکیج و رادیاتور"),
+                rating = 4.9,
+                satisfactionRate = 98
+            )
+        )
+    }
+
+    private fun getInitialSeedSpareParts(): List<KodyarSparePart> {
+        return listOf(
+            KodyarSparePart(
+                id = "part_seed_1",
+                name = "پمپ تخلیه ماشین لباسشویی بوش و ال جی",
+                brand = "بوش / ال جی",
+                category = "ماشین لباسشویی",
+                device_category = "ماشین لباسشویی",
+                price = 380000.0,
+                stock = 15,
+                stock_quantity = 15,
+                description = "پمپ تخلیه فابریک اورجینال ۸ پره مناسب برای انواع ماشین‌های لباسشویی اتوماتیک"
+            ),
+            KodyarSparePart(
+                id = "part_seed_2",
+                name = "شیر برقی دو قلو ماشین لباسشویی سامسونگ",
+                brand = "سامسونگ",
+                category = "ماشین لباسشویی",
+                device_category = "ماشین لباسشویی",
+                price = 260000.0,
+                stock = 24,
+                stock_quantity = 24,
+                description = "شیر برقی ورودی آب سرد و گرم دو قلو با فیلتر استیل ضد رسوب"
+            ),
+            KodyarSparePart(
+                id = "part_seed_3",
+                name = "سنسور دیفراست و ترموفیوز یخچال فریزر ال جی",
+                brand = "ال جی",
+                category = "یخچال و فریزر",
+                device_category = "یخچال و فریزر",
+                price = 195000.0,
+                stock = 18,
+                stock_quantity = 18,
+                description = "سنسور سنجش دمای اواپراتور و دیفراست به همراه فیوز حرارتی ۷۲ درجه فابریک"
+            ),
+            KodyarSparePart(
+                id = "part_seed_4",
+                name = "برد اینورتر کمپرسور یخچال ساید بای ساید سامسونگ",
+                brand = "سامسونگ",
+                category = "یخچال و فریزر",
+                device_category = "یخچال و فریزر",
+                price = 1450000.0,
+                stock = 8,
+                stock_quantity = 8,
+                description = "برد راه انداز موتور اینورتر دیجیتال اصلی مناسب برای ساید بای ساید سری فرنچ و رومانو"
+            ),
+            KodyarSparePart(
+                id = "part_seed_5",
+                name = "میکروسوئیچ و قفل حرارتی درب لباسشویی بوش",
+                brand = "بوش",
+                category = "ماشین لباسشویی",
+                device_category = "ماشین لباسشویی",
+                price = 320000.0,
+                stock = 12,
+                stock_quantity = 12,
+                description = "قفل برقی درب با رله حرارتی PTC مدل اورجینال ساخت ایتالیا و آلمان"
+            ),
+            KodyarSparePart(
+                id = "part_seed_6",
+                name = "المنت حرارتی کف ماشین ظرفشویی ال جی و سامسونگ",
+                brand = "ال جی",
+                category = "ماشین ظرفشویی",
+                device_category = "ماشین ظرفشویی",
+                price = 540000.0,
+                stock = 9,
+                stock_quantity = 9,
+                description = "هیتر لوله‌ای ۲۰۰۰ وات از جنس استیل ۳۱۶ مقاوم در برابر خوردگی نمک ظرفشویی"
+            ),
+            KodyarSparePart(
+                id = "part_seed_7",
+                name = "خازن روغنی راه‌انداز کمپرسور کولر گازی ۵۰ میکروفاراد",
+                brand = "جنرال",
+                category = "کولر گازی",
+                device_category = "کولر گازی",
+                price = 185000.0,
+                stock = 30,
+                stock_quantity = 30,
+                description = "خازن دائم کار ۴۵۰ ولت AC استوانه‌ای فلزی ضد انفجار برای اسپلیت ۱۸۰۰۰ و ۲۴۰۰۰"
+            ),
+            KodyarSparePart(
+                id = "part_seed_8",
+                name = "فیلتر تصفیه آب داخلی یخچال ساید بای ساید موشکی",
+                brand = "عمومی",
+                category = "یخچال و فریزر",
+                device_category = "یخچال و فریزر",
+                price = 290000.0,
+                stock = 45,
+                stock_quantity = 45,
+                description = "فیلتر کربن فعال آنتی‌باکتریال با قابلیت حذف کلر و املاح معلق آب"
+            )
+        )
     }
 
     private fun ensureDefaultFilters() {
@@ -888,9 +1325,10 @@ class AssistantViewModel(
         val finalRole = if (!user.role.isNullOrBlank()) user.role else (cached?.role ?: "customer")
         val finalCategories = if (!user.categories.isNullOrEmpty()) user.categories else cached?.categories
         val isTechUser = finalRole == "technician" || finalRole == "tech" || finalRole == "repairman"
-        val finalIsApproved = if (isTechUser) user.isApprovedUser else true
+        val isSuspended = user.isSuspended
+        val finalIsApproved = if (isTechUser) (!isSuspended && user.isApprovedUser) else true
         val finalApprovalStatus = if (isTechUser) {
-            if (finalIsApproved) "approved" else (user.approval_status ?: "pending")
+            if (isSuspended) "suspended" else (if (finalIsApproved) "approved" else (user.approval_status ?: "pending"))
         } else {
             "approved"
         }
@@ -992,6 +1430,10 @@ class AssistantViewModel(
         }
         val defaultApprovalStatus = if (isTechUser) "pending" else "approved"
         val approvalStatus = sharedPrefs.getString("cached_user_approval_status", defaultApprovalStatus) ?: defaultApprovalStatus
+        val isSuspended = approvalStatus.lowercase() in listOf("suspended", "blocked", "banned", "معلق", "مسدود", "غیرفعال", "رد شده")
+        val finalIsApproved = if (isSuspended) false else (if (isTechUser) isApproved else true)
+        val finalStatus = if (isSuspended) "suspended" else (if (isTechUser) (if (finalIsApproved) "approved" else "pending") else "active")
+
         return KodyarUser(
             id = id,
             full_name = name,
@@ -1000,11 +1442,11 @@ class AssistantViewModel(
             role = role,
             city = city,
             categories = categories,
-            is_approved = if (isTechUser) isApproved else true,
-            approval_status = if (isTechUser) (if (isApproved) "approved" else "pending") else "approved",
-            is_verified = true,
-            isVerified = true,
-            status = if (isTechUser) (if (isApproved) "approved" else "pending") else "active"
+            is_approved = finalIsApproved,
+            approval_status = if (isSuspended) "suspended" else (if (isTechUser) (if (finalIsApproved) "approved" else "pending") else "approved"),
+            is_verified = if (isSuspended) false else (if (isTechUser) finalIsApproved else true),
+            isVerified = if (isSuspended) false else (if (isTechUser) finalIsApproved else true),
+            status = finalStatus
         )
     }
 
@@ -1115,6 +1557,46 @@ class AssistantViewModel(
         return KodyarSubscription(is_premium = false, expiry_date = null)
     }
 
+    fun isTechnicianVerifiedInList(user: KodyarUser?, techList: List<KodyarTechnician>): Boolean {
+        if (user == null || techList.isEmpty()) return false
+        val userPhone = normalizePhone(user.phone)
+        val userName = (user.full_name ?: "").trim()
+        val userId = (user.id ?: "").trim()
+
+        return techList.any { tech ->
+            val tPhone = normalizePhone(tech.phone)
+            val tName = tech.resolvedName.trim()
+            val tId = (tech.id ?: "").trim()
+
+            val matchesPhone = userPhone.isNotBlank() && tPhone.isNotBlank() && (userPhone == tPhone || userPhone.removePrefix("0") == tPhone.removePrefix("0"))
+            val matchesId = userId.isNotBlank() && tId.isNotBlank() && userId == tId
+            val matchesName = userName.isNotBlank() && tName.isNotBlank() && userName == tName
+
+            (matchesPhone || matchesId || matchesName) && tech.resolvedIsVerified
+        }
+    }
+
+    private fun checkAndSyncCurrentUserApprovalWithTechList(techList: List<KodyarTechnician>) {
+        val user = _currentUser.value ?: return
+        val isTech = user.role == "technician" || user.role == "tech" || user.role == "repairman" || user.isTechnicianUser
+        if (!isTech) return
+        if (user.isSuspended) return
+
+        if (!user.isApprovedUser && isTechnicianVerifiedInList(user, techList)) {
+            val updated = user.copy(
+                is_approved = true,
+                approval_status = "approved",
+                is_verified = true,
+                isVerified = true,
+                status = if (user.isVacation) "vacation" else "approved"
+            )
+            _currentUser.value = updated
+            saveUserToCache(updated)
+            Log.d("AssistantViewModel", "Synced technician approval with verified server technicians list successfully.")
+        }
+        syncTechnicianStatusFromServer(_currentUser.value ?: user, techList)
+    }
+
     fun loadCurrentUser(token: String) {
         viewModelScope.launch {
             try {
@@ -1131,20 +1613,27 @@ class AssistantViewModel(
                     val persistentCity = if (!response.user.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${response.user.phone}", null) else null
                     val sub = extractSubscription(response.user, response.subscription, subStatusRes)
                     val isTech = response.user.role == "technician" || response.user.role == "tech" || response.user.role == "repairman"
-                    val isApproved = if (isTech) response.user.isApprovedUser else true
+                    val isSuspended = response.user.isSuspended
+                    val isApproved = if (isTech) (!isSuspended && response.user.isApprovedUser) else true
+                    // Check against verified technicians list from server (only if not suspended)
+                    val finalApproved = if (isSuspended) false else (isApproved || isTechnicianVerifiedInList(response.user, _liveTechnicians.value))
+                    val rawStatus = (response.user.status ?: "").trim().lowercase()
+                    val isRawVacation = response.user.isVacation || rawStatus == "vacation" || rawStatus == "on_leave" || rawStatus.contains("مرخصی")
+                    val finalStatus = if (isSuspended) "suspended" else if (isRawVacation) "vacation" else if (rawStatus == "active") "active" else (if (isTech) (if (finalApproved) "approved" else "pending") else (response.user.status ?: "active"))
                     val mergedUser = response.user.copy(
                         subscription = sub,
                         city = if (!response.user.resolvedCity.isNullOrBlank()) response.user.resolvedCity else (cached?.resolvedCity ?: persistentCity),
                         role = if (!response.user.role.isNullOrBlank()) response.user.role else (cached?.role ?: "customer"),
                         categories = if (!response.user.categories.isNullOrEmpty()) response.user.categories else cached?.categories,
-                        is_approved = if (isTech) isApproved else true,
-                        approval_status = if (isTech) (if (isApproved) "approved" else "pending") else "approved",
-                        is_verified = response.user.is_verified ?: true,
-                        isVerified = response.user.isVerified ?: true,
-                        status = if (isTech) (if (isApproved) "approved" else "pending") else (response.user.status ?: "active")
+                        is_approved = if (isTech) finalApproved else true,
+                        approval_status = if (isSuspended) "suspended" else (if (isTech) (if (finalApproved) "approved" else "pending") else "approved"),
+                        is_verified = if (isSuspended) false else (if (isTech) finalApproved else (response.user.is_verified ?: true)),
+                        isVerified = if (isSuspended) false else (if (isTech) finalApproved else (response.user.isVerified ?: true)),
+                        status = finalStatus
                     )
                     _currentUser.value = mergedUser
                     saveUserToCache(mergedUser)
+                    syncTechnicianStatusFromServer(mergedUser, _liveTechnicians.value)
                     loadFreeStatus()
                     loadRepairs()
                     loadPartPurchases()
@@ -1190,10 +1679,16 @@ class AssistantViewModel(
                     val persistentCity = if (!response.user.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${response.user.phone}", null) else null
                     val sub = extractSubscription(response.user, response.subscription)
                     val isTech = response.user.role == "technician" || response.user.role == "tech" || response.user.role == "repairman"
-                    val isApproved = if (isTech) response.user.isApprovedUser else true
+                    val isSuspended = response.user.isSuspended
+                    val isApproved = if (isTech) (!isSuspended && response.user.isApprovedUser) else true
+                    val finalApproved = if (isSuspended) false else (isApproved || isTechnicianVerifiedInList(response.user, _liveTechnicians.value))
                     val finalRole = if (isTech) "technician" else if (!response.user.role.isNullOrBlank()) response.user.role else (cached?.role ?: "customer")
                     val userCats = if (!response.user.categories.isNullOrEmpty()) response.user.categories else response.user.specialty
                     val finalCategories = if (!userCats.isNullOrEmpty()) userCats else cached?.categories
+
+                    val rawStatus = (response.user.status ?: "").trim().lowercase()
+                    val isRawVacation = response.user.isVacation || rawStatus == "vacation" || rawStatus == "on_leave" || rawStatus.contains("مرخصی")
+                    val finalStatus = if (isSuspended) "suspended" else if (isRawVacation) "vacation" else if (rawStatus == "active") "active" else (if (isTech) (if (finalApproved) "approved" else "pending") else (response.user.status ?: "active"))
 
                     val mergedUser = response.user.copy(
                         subscription = sub,
@@ -1201,15 +1696,16 @@ class AssistantViewModel(
                         city = if (!response.user.resolvedCity.isNullOrBlank()) response.user.resolvedCity else (cached?.resolvedCity ?: persistentCity),
                         role = finalRole,
                         categories = finalCategories,
-                        is_approved = if (isTech) isApproved else true,
-                        approval_status = if (isTech) (if (isApproved) "approved" else "pending") else "approved",
-                        is_verified = response.user.is_verified ?: true,
-                        isVerified = response.user.isVerified ?: true,
-                        status = if (isTech) (if (isApproved) "approved" else "pending") else (response.user.status ?: "active")
+                        is_approved = if (isTech) finalApproved else true,
+                        approval_status = if (isSuspended) "suspended" else (if (isTech) (if (finalApproved) "approved" else "pending") else "approved"),
+                        is_verified = if (isSuspended) false else (if (isTech) finalApproved else (response.user.is_verified ?: true)),
+                        isVerified = if (isSuspended) false else (if (isTech) finalApproved else (response.user.isVerified ?: true)),
+                        status = finalStatus
                     )
                     val tokenToSave = response.token ?: response.session_token ?: response.user.id
                     _currentUser.value = mergedUser
                     saveUserToCache(mergedUser)
+                    syncTechnicianStatusFromServer(mergedUser, _liveTechnicians.value)
                     saveSessionToken(tokenToSave)
                     sharedPrefs.edit()
                         .remove("session_token")
@@ -1559,47 +2055,74 @@ class AssistantViewModel(
     fun checkTechnicianApprovalStatus(onResult: (Boolean, String) -> Unit) {
         val token = getSessionToken()
         val user = _currentUser.value
-        if (token.isNullOrBlank()) {
-            val approved = user?.isApprovedUser == true
-            onResult(approved, if (approved) "✅ حساب شما تایید شده است." else "⏳ حساب شما هنوز در انتظار تایید مدیریت کدیار است.")
-            return
-        }
         viewModelScope.launch {
             try {
-                val response = repository.getMe(token)
-                if ((response.status == "ok" || response.status == "success") && response.user != null) {
-                    val serverUser = response.user
-                    val isApprovedOnServer = serverUser.isApprovedUser
-                    val sub = extractSubscription(serverUser, response.subscription)
-                    val cached = getCachedUser()
-                    val persistentCity = if (!serverUser.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${serverUser.phone}", null) else null
+                // Fetch both user profile and live server technicians list
+                val techListDeferred = async {
+                    try { repository.getTechniciansDirectly() } catch (_: Exception) { emptyList() }
+                }
+                val meDeferred = async {
+                    if (!token.isNullOrBlank()) {
+                        try { repository.getMe(token) } catch (_: Exception) { null }
+                    } else null
+                }
 
-                    val updatedUser = serverUser.copy(
+                val directTechs = techListDeferred.await()
+                if (directTechs.isNotEmpty()) {
+                    val currentList = _liveTechnicians.value.toMutableList()
+                    for (t in directTechs) {
+                        val idx = currentList.indexOfFirst { it.id == t.id || (!it.name.isNullOrBlank() && it.name == t.name) }
+                        if (idx >= 0) currentList[idx] = t else currentList.add(t)
+                    }
+                    _liveTechnicians.value = currentList
+                }
+
+                val response = meDeferred.await()
+                val targetUser = response?.user ?: user
+                val isSuspended = targetUser?.isSuspended == true
+                val isApprovedOnServer = targetUser?.isApprovedUser == true
+                val isApprovedInTechList = !isSuspended && isTechnicianVerifiedInList(targetUser, _liveTechnicians.value)
+                val finalApproved = !isSuspended && (isApprovedOnServer || isApprovedInTechList)
+
+                if (targetUser != null) {
+                    val sub = if (response != null) extractSubscription(targetUser, response.subscription) else targetUser.subscription
+                    val cached = getCachedUser()
+                    val persistentCity = if (!targetUser.phone.isNullOrBlank()) sharedPrefs.getString("persistent_city_${targetUser.phone}", null) else null
+
+                    val updatedUser = targetUser.copy(
                         subscription = sub,
-                        city = if (!serverUser.city.isNullOrBlank()) serverUser.city else (cached?.city ?: persistentCity),
-                        role = if (!serverUser.role.isNullOrBlank()) serverUser.role else (cached?.role ?: "customer"),
-                        categories = if (!serverUser.categories.isNullOrEmpty()) serverUser.categories else cached?.categories,
-                        is_approved = isApprovedOnServer,
-                        approval_status = if (isApprovedOnServer) "approved" else "pending",
-                        is_verified = serverUser.is_verified ?: true,
-                        isVerified = serverUser.isVerified ?: true,
-                        status = if (isApprovedOnServer) "approved" else (serverUser.status ?: "pending")
+                        city = if (!targetUser.city.isNullOrBlank()) targetUser.city else (cached?.city ?: persistentCity),
+                        role = if (!targetUser.role.isNullOrBlank()) targetUser.role else (cached?.role ?: "technician"),
+                        categories = if (!targetUser.categories.isNullOrEmpty()) targetUser.categories else cached?.categories,
+                        is_approved = finalApproved,
+                        approval_status = if (isSuspended) "suspended" else (if (finalApproved) "approved" else "pending"),
+                        is_verified = finalApproved,
+                        isVerified = finalApproved,
+                        status = if (isSuspended) "suspended" else if (targetUser.isVacation || targetUser.status == "vacation") "vacation" else (if (finalApproved) "approved" else (targetUser.status ?: "pending"))
                     )
                     _currentUser.value = updatedUser
                     saveUserToCache(updatedUser)
+                }
 
-                    if (isApprovedOnServer) {
-                        onResult(true, "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است.")
-                    } else {
-                        onResult(false, "⏳ مدارک و حساب شما هنوز توسط مدیریت سایت کدیار تایید نشده است. لطفاً منتظر بمانید.")
-                    }
+                if (isSuspended) {
+                    onResult(false, "⛔ حساب کاربری شما توسط مدیریت سایت کدیار تعلیق گردیده است. جهت بررسی با پشتیبانی تماس بگیرید.")
+                } else if (finalApproved) {
+                    onResult(true, "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است.")
                 } else {
-                    val approved = user?.isApprovedUser == true
-                    onResult(approved, if (approved) "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است." else "⏳ وضعیت حساب شما در انتظار تایید مدیریت است.")
+                    onResult(false, "⏳ مدارک و حساب شما هنوز توسط مدیریت سایت کدیار تایید نشده است. لطفاً منتظر بمانید.")
                 }
             } catch (e: Exception) {
-                val approved = user?.isApprovedUser == true
-                onResult(approved, if (approved) "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است." else "⏳ وضعیت حساب شما در انتظار تایید مدیریت است.")
+                val curr = _currentUser.value
+                val isSusp = curr?.isSuspended == true
+                val approved = !isSusp && (curr?.isApprovedUser == true || isTechnicianVerifiedInList(curr, _liveTechnicians.value))
+                val msg = if (isSusp) {
+                    "⛔ حساب کاربری شما توسط مدیریت تعلیق گردیده است."
+                } else if (approved) {
+                    "✅ تبریک! حساب شما توسط مدیریت سایت کدیار تایید شده است."
+                } else {
+                    "⏳ وضعیت حساب شما در انتظار تایید مدیریت است."
+                }
+                onResult(approved, msg)
             }
         }
     }
@@ -1647,83 +2170,90 @@ class AssistantViewModel(
             // Only trigger database loading splash screen if we don't have any cached/loaded data yet!
             _isDatabaseLoading.value = _liveErrorCodes.value.isEmpty()
             _isLiveDataSyncing.value = true
-            _isSparePartsLoading.value = true
+            _isSparePartsLoading.value = _liveSpareParts.value.isEmpty()
             try {
                 val response = repository.getKodyarDatabase()
                 checkForDatabaseUpdates(response)
                 checkAppVersion(response)
-                _liveErrorCodes.value = response.resolvedErrorCodes
-                _liveSpareParts.value = response.resolvedSpareParts
+                if (response.resolvedErrorCodes.isNotEmpty()) {
+                    _liveErrorCodes.value = response.resolvedErrorCodes
+                }
+                if (response.resolvedSpareParts.isNotEmpty()) {
+                    _liveSpareParts.value = response.resolvedSpareParts
+                }
                 
                 val incomingTechs = response.resolvedTechnicians
-                val currentTechs = _liveTechnicians.value.toMutableList()
                 if (incomingTechs.isNotEmpty()) {
-                    for (t in incomingTechs) {
-                        val idx = currentTechs.indexOfFirst { it.id == t.id || (!it.name.isNullOrBlank() && it.name == t.name) }
-                        if (idx >= 0) {
-                            currentTechs[idx] = t
-                        } else {
-                            currentTechs.add(t)
-                        }
-                    }
+                    _liveTechnicians.value = incomingTechs
                 }
-                _liveTechnicians.value = currentTechs
 
-                try {
-                    val directTechs = repository.getTechniciansDirectly()
-                    if (directTechs.isNotEmpty()) {
-                        val updatedList = _liveTechnicians.value.toMutableList()
-                        for (t in directTechs) {
-                            val idx = updatedList.indexOfFirst { it.id == t.id || (!it.name.isNullOrBlank() && it.name == t.name) }
-                            if (idx >= 0) {
-                                updatedList[idx] = t
-                            } else {
-                                updatedList.add(t)
-                            }
-                        }
-                        _liveTechnicians.value = updatedList
-                    }
-                } catch (_: Exception) {}
+                // Automatically synchronize current user approval status if they exist in verified technicians list
+                checkAndSyncCurrentUserApprovalWithTechList(_liveTechnicians.value)
 
-                _liveCommonProblems.value = response.resolvedCommonProblems
+                if (response.resolvedCommonProblems.isNotEmpty()) {
+                    _liveCommonProblems.value = response.resolvedCommonProblems
+                }
 
                 val dynamicCats = (response.resolvedCategoriesList + response.resolvedErrorCodes.mapNotNull { it.resolvedCategory }).filter { it.isNotBlank() }.distinct()
-                _liveCategories.value = listOf("همه") + dynamicCats
+                if (dynamicCats.isNotEmpty()) {
+                    _liveCategories.value = listOf("همه") + dynamicCats
+                }
 
                 val dynamicBrands = (response.resolvedBrandsList + response.resolvedErrorCodes.mapNotNull { it.brand }).filter { it.isNotBlank() }.distinct()
-                _liveBrands.value = listOf("همه") + dynamicBrands
+                if (dynamicBrands.isNotEmpty()) {
+                    _liveBrands.value = listOf("همه") + dynamicBrands
+                }
                 val parsedCities = response.resolvedCitiesList.flatMap { 
                     listOfNotNull(it.name, it.title, it.city, it.cityName, it.name_fa, it.nameFarsi, it.slug)
                 }.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-                _liveCities.value = listOf("همه") + parsedCities
-                _liveCitiesStructured.value = response.resolvedCitiesList
+                if (parsedCities.isNotEmpty()) {
+                    _liveCities.value = listOf("همه") + parsedCities
+                    _liveCitiesStructured.value = response.resolvedCitiesList
+                }
 
                 // Trigger initial search results
                 updateSearchFilters(_searchQuery.value, _selectedBrand.value, _selectedCategory.value)
 
                 hasLoadedFromNetwork = true
 
-                // Save to Room Database as Single Source of Truth - ONLY errorCodes and commonProblems
+                // Save to Room Database as Single Source of Truth
                 try {
                     repository.saveDatabaseToRoom(
-                        errorCodes = response.resolvedErrorCodes,
-                        commonProblems = response.resolvedCommonProblems
+                        errorCodes = _liveErrorCodes.value,
+                        spareParts = _liveSpareParts.value,
+                        commonProblems = _liveCommonProblems.value,
+                        technicians = _liveTechnicians.value
                     )
                 } catch (e: Exception) {
-                    Log.e("AssistantViewModel", "Failed to save error codes and common problems to Room DB", e)
+                    Log.e("AssistantViewModel", "Failed to save data to Room DB", e)
                 }
 
-                // Save successful response to local cache - ONLY errorCodes and commonProblems
+                // Save complete database response to local cache
                 try {
-                    val staticDataOnly = response.copy(
-                        spareParts = emptyList(),
-                        technicians = emptyList()
-                    )
-                    val json = databaseAdapter.toJson(staticDataOnly)
+                    val json = databaseAdapter.toJson(response)
                     sharedPrefs.edit().putString("cached_kodyar_database", json).apply()
-                    Log.d("AssistantViewModel", "Saved only error codes and common problems to local device cache.")
                 } catch (e: Exception) {
                     Log.e("AssistantViewModel", "Failed to cache database response.", e)
+                }
+
+                // Dedicated persistent cache for technicians
+                if (_liveTechnicians.value.isNotEmpty()) {
+                    try {
+                        val techJson = techniciansAdapter.toJson(_liveTechnicians.value)
+                        sharedPrefs.edit().putString("cached_technicians_json", techJson).apply()
+                    } catch (e: Exception) {
+                        Log.e("AssistantViewModel", "Failed to cache technicians.", e)
+                    }
+                }
+
+                // Dedicated persistent cache for spare parts
+                if (_liveSpareParts.value.isNotEmpty()) {
+                    try {
+                        val partsJson = sparePartsAdapter.toJson(_liveSpareParts.value)
+                        sharedPrefs.edit().putString("cached_spare_parts_json", partsJson).apply()
+                    } catch (e: Exception) {
+                        Log.e("AssistantViewModel", "Failed to cache spare parts.", e)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("AssistantViewModel", "Error loading kodyar database from API.", e)
@@ -1738,20 +2268,25 @@ class AssistantViewModel(
 
     fun refreshTechnicians() {
         viewModelScope.launch {
-            _isTechniciansLoading.value = true
+            _isTechniciansLoading.value = _liveTechnicians.value.isEmpty()
             try {
                 val techRes = repository.getTechniciansDirectly()
                 if (techRes.isNotEmpty()) {
-                    val currentList = _liveTechnicians.value.toMutableList()
-                    for (t in techRes) {
-                        val idx = currentList.indexOfFirst { it.id == t.id || (!it.name.isNullOrBlank() && it.name == t.name) }
-                        if (idx >= 0) {
-                            currentList[idx] = t
-                        } else {
-                            currentList.add(t)
-                        }
-                    }
-                    _liveTechnicians.value = currentList
+                    _liveTechnicians.value = techRes
+
+                    // Cache to SharedPreferences
+                    try {
+                        val techJson = techniciansAdapter.toJson(techRes)
+                        sharedPrefs.edit().putString("cached_technicians_json", techJson).apply()
+                    } catch (_: Exception) {}
+
+                    // Persist to Room
+                    try {
+                        repository.saveTechniciansToRoom(techRes)
+                    } catch (_: Exception) {}
+
+                    // Synchronize current technician approval and vacation status with latest server data
+                    checkAndSyncCurrentUserApprovalWithTechList(techRes)
                 }
             } catch (e: Exception) {
                 Log.e("AssistantViewModel", "Failed to refresh technicians: ${e.message}")
@@ -1772,8 +2307,16 @@ class AssistantViewModel(
         val codes = _liveErrorCodes.value
         if (codes.isEmpty()) return listOf("همه")
 
-        val filtered = codes.filter { error ->
-            matchNormalized(error.brand, brand) && matchNormalized(error.category, category)
+        val isAllBrand = brand == "همه" || brand.isBlank()
+        val isAllCategory = category == "همه" || category.isBlank()
+
+        val filtered = if (isAllBrand && isAllCategory) {
+            codes
+        } else {
+            codes.filter { error ->
+                (isAllBrand || matchNormalized(error.brand, brand)) &&
+                (isAllCategory || matchNormalized(error.category ?: error.resolvedCategory, category))
+            }
         }
 
         val models = filtered.mapNotNull { error ->
@@ -2280,6 +2823,10 @@ class AssistantViewModel(
     }
 
     fun addToCart(partId: String) {
+        val part = _liveSpareParts.value.find { it.id == partId }
+        val maxStock = part?.resolvedStock ?: 0
+        if (maxStock <= 0) return
+
         val currentCart = _cart.value.toMutableList()
         if (!currentCart.contains(partId)) {
             currentCart.add(partId)
@@ -2293,7 +2840,7 @@ class AssistantViewModel(
 
     fun addToCartWithQty(partId: String, qty: Int) {
         val part = _liveSpareParts.value.find { it.id == partId }
-        val maxStock = part?.stock ?: 10
+        val maxStock = part?.resolvedStock ?: 0
         if (maxStock <= 0) return
 
         val currentCart = _cart.value.toMutableList()
@@ -2321,9 +2868,9 @@ class AssistantViewModel(
 
     fun updateCartQty(partId: String, qty: Int) {
         val part = _liveSpareParts.value.find { it.id == partId }
-        val maxStock = part?.stock ?: 10
+        val maxStock = part?.resolvedStock ?: 0
         val currentQty = _cartQty.value.toMutableMap()
-        if (qty > 0) {
+        if (qty > 0 && maxStock > 0) {
             currentQty[partId] = minOf(maxStock, qty)
             _cartQty.value = currentQty
             persistCart()
@@ -2377,7 +2924,11 @@ class AssistantViewModel(
                 val failedParts = mutableListOf<String>()
 
                 for (partId in cartList) {
-                    val part = _liveSpareParts.value.find { it.id == partId } ?: continue
+                    val part = _liveSpareParts.value.find { it.id == partId }
+                    if (part == null || part.resolvedStock <= 0) {
+                        failedParts.add(part?.name ?: "قطعه ناموجود")
+                        continue
+                    }
                     val qty = qtyMap[partId] ?: 1
                     val price = part.price ?: 0.0
                     val subtotal = price * qty
@@ -2604,7 +3155,9 @@ class AssistantViewModel(
                 } else {
                     rawRepairs
                 }
-                _repairOrders.value = filtered
+                if (_repairOrders.value != filtered) {
+                    _repairOrders.value = filtered
+                }
 
                 // Detect new unassigned orders for active & approved technician and trigger sound & alert popup
                 if (isApprovedTech && _isTechnicianOnline.value) {
@@ -2676,7 +3229,9 @@ class AssistantViewModel(
                 }
                 val mergedPurchases = updatedLocal + newFromServer
 
-                _partPurchases.value = mergedPurchases
+                if (_partPurchases.value != mergedPurchases) {
+                    _partPurchases.value = mergedPurchases
+                }
                 try {
                     val json = partPurchasesAdapter.toJson(mergedPurchases)
                     sharedPrefs.edit().putString("part_purchases_json", json).apply()
@@ -2779,7 +3334,7 @@ class AssistantViewModel(
         }
     }
 
-    fun updateOrderStatus(orderId: String, status: String, onResult: (Boolean, String?) -> Unit) {
+    fun updateOrderStatus(orderId: String, status: String, amount: Long? = null, onResult: (Boolean, String?) -> Unit) {
         val token = getSessionToken()
         if (token.isNullOrBlank()) {
             onResult(false, "نشست کاربری یافت نشد.")
@@ -2810,40 +3365,67 @@ class AssistantViewModel(
 
         viewModelScope.launch {
             try {
-                repository.updateOrderStatus(token, orderId, status, techId)
+                val res = repository.updateOrderStatus(token, orderId, status, techId, amount)
                 loadRepairs(silent = true)
                 checkSavedSession() // Refresh user wallet and commission status
-                onResult(true, null)
+                if (res.status == "error" || res.success == false) {
+                    val errMsg = res.message ?: res.error ?: "خطا در بروزرسانی وضعیت سفارش"
+                    onResult(false, errMsg)
+                } else {
+                    onResult(true, null)
+                }
             } catch (e: Exception) {
                 Log.e("AssistantViewModel", "API updateOrderStatus sync error", e)
                 loadRepairs(silent = true)
-                onResult(true, null)
+                val errMsg = repository.parseApiError(e)
+                onResult(false, errMsg)
             }
         }
     }
 
     fun acceptRepairOrder(orderId: String, onResult: (Boolean, String?) -> Unit) {
-        val user = _currentUser.value
-        if (user != null && user.hasCommissionDebt) {
-            onResult(false, "جهت قبول سفارش جدید، ابتدا نسبت به تسویه بدهی کمیسیون خود اقدام فرمایید.")
-            return
-        }
-        updateOrderStatus(orderId, "accepted", onResult)
+        updateOrderStatus(orderId, "accepted", amount = null, onResult = onResult)
     }
 
-    fun openCommissionSettlement(context: Context) {
+    fun unlockOrderWithCommission(
+        order: KodyarRepairOrder,
+        trackingCode: String,
+        depositorName: String,
+        commissionAmount: Long,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val orderId = order.resolvedOrderId.ifBlank { order.id ?: "" }
+        if (orderId.isBlank()) {
+            onResult(false, "شناسه سفارش نامعتبر است")
+            return
+        }
         val user = _currentUser.value
-        val phone = Uri.encode((user?.phone ?: "").trim())
-        val userId = Uri.encode((user?.id ?: "").trim())
-        val baseUrl = com.example.data.api.KodyarRetrofitClient.siteRootUrl
-        val targetUrl = "$baseUrl/?action=settle_commission&phone=$phone&user_id=$userId"
-        try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        viewModelScope.launch {
+            try {
+                // 1. Submit card-to-card commission payment receipt
+                val settleReq = com.example.data.api.SettleCommissionRequest(
+                    techId = user?.id,
+                    phone = user?.phone,
+                    amount = commissionAmount,
+                    paymentMethod = "card_to_card",
+                    trackingCode = trackingCode,
+                    orderId = orderId
+                )
+                repository.settleCommission(settleReq)
+
+                // 2. Accept and assign order to this technician (unlocking customer details)
+                updateOrderStatus(orderId, "accepted", amount = commissionAmount) { success, err ->
+                    if (success) {
+                        loadRepairs(silent = true)
+                        checkSavedSession()
+                        onResult(true, null)
+                    } else {
+                        onResult(false, err ?: "خطا در ثبت سفارش")
+                    }
+                }
+            } catch (e: Exception) {
+                onResult(false, e.localizedMessage ?: "خطا در ارتباط با سرور")
             }
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(context, "خطا در باز کردن درگاه تسویه کمیسیون", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -3161,11 +3743,13 @@ class AssistantViewModel(
             val result = repository.getMyTickets(phoneOrToken)
             if (!silent) _isTicketsLoading.value = false
             result.onSuccess { list ->
-                _userTickets.value = list
+                if (_userTickets.value != list) {
+                    _userTickets.value = list
+                }
                 // If a ticket is currently selected, update it with fresh data
                 _selectedTicket.value?.let { currentSelected ->
                     val updated = list.find { it.id == currentSelected.id }
-                    if (updated != null) {
+                    if (updated != null && _selectedTicket.value != updated) {
                         _selectedTicket.value = updated
                     }
                 }

@@ -66,14 +66,42 @@ data class KodyarDatabaseResponse(
             val techUsers = allUsers?.filter { it.role == "technician" || it.role == "tech" || it.role == "repairman" }
             if (!techUsers.isNullOrEmpty()) {
                 for (u in techUsers) {
-                    val exists = combined.any { it.id == u.id || (!it.name.isNullOrBlank() && it.name == u.full_name) }
-                    if (!exists) {
+                    val existingIdx = combined.indexOfFirst {
+                        (it.id?.isNotBlank() == true && (it.id == u.id || it.user_id == u.id)) ||
+                        (!it.phone.isNullOrBlank() && it.phone == u.phone) ||
+                        (!it.name.isNullOrBlank() && it.name == u.full_name)
+                    }
+                    val isUserVacation = u.isVacation
+                    if (existingIdx >= 0) {
+                        val existing = combined[existingIdx]
+                        val effectiveStatus = if (isUserVacation) "vacation" else (u.status ?: existing.status)
+                        val effectiveWorkStatus = if (isUserVacation) "vacation" else (u.work_status ?: existing.work_status)
+                        val effectiveOnline = if (isUserVacation) false else (u.is_online ?: existing.is_online)
+                        combined[existingIdx] = existing.copy(
+                            phone = existing.phone ?: u.phone,
+                            user_id = existing.user_id ?: u.id,
+                            status = effectiveStatus,
+                            work_status = effectiveWorkStatus,
+                            is_online = effectiveOnline,
+                            vacation = if (isUserVacation) true else (u.vacation ?: existing.vacation),
+                            on_vacation = if (isUserVacation) true else (u.on_vacation ?: existing.on_vacation),
+                            city = existing.city ?: u.resolvedCity,
+                            isVerified = existing.isVerified ?: u.isApprovedUser
+                        )
+                    } else {
                         combined.add(
                             KodyarTechnician(
                                 id = u.id,
+                                user_id = u.id,
                                 name = u.full_name.ifBlank { "تکنسین کدیار" },
+                                phone = u.phone,
                                 city = u.resolvedCity,
                                 isVerified = u.isApprovedUser,
+                                status = if (isUserVacation) "vacation" else (u.status ?: "active"),
+                                work_status = if (isUserVacation) "vacation" else (u.work_status ?: "active"),
+                                is_online = if (isUserVacation) false else (u.is_online ?: true),
+                                vacation = if (isUserVacation) true else u.vacation,
+                                on_vacation = if (isUserVacation) true else u.on_vacation,
                                 completedOrders = 0,
                                 bio = "تکنسین متخصص کدیار۲۴",
                                 categories = u.categories ?: u.specialty ?: listOf("لوازم خانگی"),
@@ -359,8 +387,40 @@ data class KodyarTechnician(
     val document_images: Any? = null,
     val uploaded_documents: Any? = null,
     val status: String? = null,
-    @Json(name = "approval_status") val approval_status: String? = null
+    @Json(name = "approval_status") val approval_status: String? = null,
+    @Json(name = "is_online") val is_online: Any? = null,
+    @Json(name = "isOnline") val isOnline: Any? = null,
+    @Json(name = "work_status") val work_status: String? = null,
+    @Json(name = "workStatus") val workStatus: String? = null,
+    @Json(name = "vacation") val vacation: Any? = null,
+    @Json(name = "on_vacation") val on_vacation: Any? = null
 ) {
+    val isVacation: Boolean
+        get() {
+            val s = (status ?: "").trim().lowercase()
+            val ws = (work_status ?: workStatus ?: "").trim().lowercase()
+            val offlineKeywords = listOf("vacation", "on_leave", "مرخصی", "offline", "off", "آفلاین", "عدم فعالیت", "تعطیل")
+            if (offlineKeywords.any { s.contains(it) || ws.contains(it) }) {
+                return true
+            }
+            fun isTruthy(v: Any?): Boolean {
+                if (v == null) return false
+                if (v is Boolean) return v
+                if (v is Number) return v.toInt() == 1
+                val str = v.toString().trim().lowercase()
+                return str == "1" || str == "true" || str == "on" || str == "active" || str == "yes" || str == "online" || str == "آنلاین"
+            }
+            fun isFalsy(v: Any?): Boolean {
+                if (v == null) return false
+                if (v is Boolean) return !v
+                if (v is Number) return v.toInt() == 0
+                val str = v.toString().trim().lowercase()
+                return str == "0" || str == "false" || str == "off" || str == "inactive" || str == "no" || str == "offline" || str == "آفلاین" || str == "مرخصی"
+            }
+            if (isTruthy(vacation) || isTruthy(on_vacation)) return true
+            if (isFalsy(is_online) || isFalsy(isOnline)) return true
+            return false
+        }
     val resolvedName: String
         get() = (name ?: full_name ?: "").ifBlank { "تکنسین کدیار" }
 
@@ -395,8 +455,17 @@ data class KodyarTechnician(
                 ?: listOf("لوازم خانگی")
         }
 
+    val isSuspended: Boolean
+        get() {
+            val s = (status ?: "").trim().lowercase()
+            val a = (approval_status ?: "").trim().lowercase()
+            val suspendedKeywords = listOf("suspended", "blocked", "banned", "inactive", "rejected", "disabled", "معلق", "مسدود", "غیرفعال", "رد شده")
+            return suspendedKeywords.any { s == it || a == it || s.contains("معلق") || s.contains("مسدود") || a.contains("معلق") || a.contains("مسدود") }
+        }
+
     val resolvedIsVerified: Boolean
         get() {
+            if (isSuspended) return false
             fun parseBool(input: Any?): Boolean? {
                 if (input == null) return null
                 if (input is Boolean) return input
@@ -504,28 +573,74 @@ data class KodyarUser(
     @Json(name = "user_avatar") val user_avatar: String? = null,
     @Json(name = "user_image") val user_image: String? = null,
     val documents: List<String>? = null,
-    val document_images: List<String>? = null
+    val document_images: List<String>? = null,
+    @Json(name = "is_online") val is_online: Any? = null,
+    @Json(name = "isOnline") val isOnline: Any? = null,
+    @Json(name = "work_status") val work_status: String? = null,
+    @Json(name = "workStatus") val workStatus: String? = null,
+    @Json(name = "vacation") val vacation: Any? = null,
+    @Json(name = "on_vacation") val on_vacation: Any? = null,
+    @Json(name = "technician_status") val technician_status: String? = null
 ) {
+    val isVacation: Boolean
+        get() {
+            val s = (status ?: "").trim().lowercase()
+            val ws = (work_status ?: workStatus ?: technician_status ?: "").trim().lowercase()
+            val offlineKeywords = listOf("vacation", "on_leave", "مرخصی", "offline", "off", "آفلاین", "عدم فعالیت", "تعطیل")
+            if (offlineKeywords.any { s.contains(it) || ws.contains(it) }) {
+                return true
+            }
+            fun isTruthy(v: Any?): Boolean {
+                if (v == null) return false
+                if (v is Boolean) return v
+                if (v is Number) return v.toInt() == 1
+                val str = v.toString().trim().lowercase()
+                return str == "1" || str == "true" || str == "on" || str == "active" || str == "yes" || str == "online" || str == "آنلاین"
+            }
+            fun isFalsy(v: Any?): Boolean {
+                if (v == null) return false
+                if (v is Boolean) return !v
+                if (v is Number) return v.toInt() == 0
+                val str = v.toString().trim().lowercase()
+                return str == "0" || str == "false" || str == "off" || str == "inactive" || str == "no" || str == "offline" || str == "آفلاین" || str == "مرخصی"
+            }
+            if (isTruthy(vacation) || isTruthy(on_vacation)) return true
+            if (isFalsy(is_online) || isFalsy(isOnline)) return true
+            return false
+        }
+
     val resolvedCity: String
         get() = listOfNotNull(city, cityName, city_name, activeLocation, location, province, address, district)
             .firstOrNull { it.isNotBlank() } ?: "اراک"
 
+    val isSuspended: Boolean
+        get() {
+            val s = (status ?: "").trim().lowercase()
+            val a = (approval_status ?: "").trim().lowercase()
+            val suspendedKeywords = listOf("suspended", "blocked", "banned", "inactive", "rejected", "disabled", "معلق", "مسدود", "غیرفعال", "رد شده")
+            return suspendedKeywords.any { s == it || a == it || s.contains("معلق") || s.contains("مسدود") || a.contains("معلق") || a.contains("مسدود") }
+        }
+
     val isApprovedUser: Boolean
         get() {
             if (role != "technician" && role != "tech" && role != "repairman") return true
-            // Technicians MUST be explicitly approved by admin in database
+            // If user is suspended/blocked by admin, they are NEVER approved
+            if (isSuspended) return false
+            // Technicians check: if explicitly approved or verified in any server field
             fun parseBool(input: Any?): Boolean? {
                 if (input == null) return null
                 if (input is Boolean) return input
                 if (input is Number) return input.toInt() == 1
                 val s = input.toString().trim().lowercase()
-                return s == "1" || s == "true" || s == "approved" || s == "verified" || s == "تایید شده"
+                return s == "1" || s == "true" || s == "approved" || s == "verified" || s == "تایید شده" || s == "active"
             }
             if (parseBool(is_approved) == true) return true
+            if (parseBool(is_verified) == true) return true
+            if (parseBool(isVerified) == true) return true
             val appStat = (approval_status ?: "").trim().lowercase()
-            if (appStat == "approved" || appStat == "verified" || appStat == "تایید شده") return true
+            if (appStat == "approved" || appStat == "verified" || appStat == "تایید شده" || appStat == "active") return true
             val mainStat = (status ?: "").trim().lowercase()
-            if (mainStat == "approved" || mainStat == "verified" || mainStat == "تایید شده") return true
+            if (mainStat == "approved" || mainStat == "verified" || mainStat == "تایید شده" || mainStat == "active") return true
             return false
         }
 
@@ -666,7 +781,12 @@ data class KodyarRepairOrder(
     val trackingCode: String? = null,
     val created_at: String? = null,
     val shamsi_date: String? = null,
-    val shamsiDate: String? = null
+    val shamsiDate: String? = null,
+    val estimated_cost: Long? = null,
+    val estimatedCost: Long? = null,
+    val price: Long? = null,
+    val cost: Long? = null,
+    val amount: Long? = null
 ) {
     val resolvedOrderId: String
         get() = listOfNotNull(order_id, orderId, id, tracking_code, trackingCode).firstOrNull { it.isNotBlank() } ?: ""
@@ -827,11 +947,14 @@ data class PurchasePartRequest(
 
 @JsonClass(generateAdapter = true)
 data class OrderStatusUpdateRequest(
-    @Json(name = "order_id") val order_id: String = "",
+    @Json(name = "order_id") val order_id: String? = null,
     @Json(name = "orderId") val orderId: String? = null,
-    val status: String = "", // accepted | ongoing | completed | rejected
+    val status: String = "", // accepted | in_progress | completed | rejected
     @Json(name = "technician_id") val technician_id: String? = null,
     @Json(name = "technicianId") val technicianId: String? = null,
+    val amount: Long? = null,
+    @Json(name = "estimated_cost") val estimated_cost: Long? = null,
+    val estimatedCost: Long? = null,
     val action: String? = null
 )
 
@@ -840,7 +963,11 @@ data class UpdateProfileRequest(
     @Json(name = "full_name") val fullName: String? = null,
     val name: String? = fullName,
     val city: String? = null,
-    val district: String? = null
+    val district: String? = null,
+    val status: String? = null,
+    @Json(name = "work_status") val work_status: String? = null,
+    @Json(name = "is_online") val is_online: Boolean? = null,
+    val vacation: Boolean? = null
 )
 
 @JsonClass(generateAdapter = true)

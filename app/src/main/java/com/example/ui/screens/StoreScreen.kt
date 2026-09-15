@@ -1018,8 +1018,8 @@ fun ProductImageZoomDialog(
                             modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
-                                Icons.Default.Refresh,
-                                contentDescription = "بازنشانی زوم",
+                                Icons.Default.FitScreen,
+                                contentDescription = "اندازه اصلی تصویر",
                                 tint = Color.White,
                                 modifier = Modifier.size(18.dp)
                             )

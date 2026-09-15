@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -452,9 +453,30 @@ fun OrdersScreen(
                                     }
                                 }
 
-                                if (displayDesc.isNotBlank()) {
+                                val cleanInfo = remember(displayDesc, o.resolvedCategory, o.resolvedBrand, o.model, o.resolvedScheduledInfo, o.resolvedAddress) {
+                                    parseAndCleanOrderInfo(
+                                        rawDescription = displayDesc,
+                                        resolvedCategory = o.resolvedCategory,
+                                        resolvedBrand = o.resolvedBrand,
+                                        model = o.model,
+                                        resolvedScheduledInfo = o.resolvedScheduledInfo,
+                                        resolvedAddress = o.resolvedAddress
+                                    )
+                                }
+
+                                if (cleanInfo.deviceName.isNotBlank()) {
                                     Text(
-                                        text = displayDesc,
+                                        text = "🔧 دستگاه: ${cleanInfo.deviceName}",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CodyarNavy,
+                                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
+                                    )
+                                }
+
+                                if (cleanInfo.problemDescription.isNotBlank()) {
+                                    Text(
+                                        text = cleanInfo.problemDescription,
                                         fontSize = 13.sp,
                                         color = CodyarTextPrimary,
                                         modifier = Modifier
@@ -465,28 +487,90 @@ fun OrdersScreen(
                                     )
                                 }
 
-                                if (!o.city.isNullOrBlank()) {
-                                    val showFullAddress = !isTech || isUnlockedForTech
-                                    Text(
-                                        text = if (showFullAddress) {
-                                            "📍 شهر و آدرس: ${o.city}${if (!o.address.isNullOrBlank()) " - ${o.address}" else ""}"
-                                        } else {
-                                            "📍 محدوده سفارش: ${o.city}"
-                                        },
-                                        fontSize = 12.sp,
-                                        color = CodyarTextSecondary,
-                                        modifier = Modifier.padding(bottom = 6.dp)
-                                    )
+                                // ۱. ساعت حضور تکنسین برای تعمیرات در منزل مشتری
+                                if (cleanInfo.visitTime.isNotBlank()) {
+                                    Surface(
+                                        color = Color(0xFFEFF6FF),
+                                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text("⏰", fontSize = 14.sp)
+                                            Text(
+                                                text = "ساعت حضور تکنسین در منزل: ${cleanInfo.visitTime}",
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF1D4ED8)
+                                            )
+                                        }
+                                    }
                                 }
 
-                                if (o.resolvedCategory.isNotBlank() || o.resolvedBrand.isNotBlank()) {
-                                    val catBrand = listOf(o.resolvedCategory, o.resolvedBrand, o.model).filter { !it.isNullOrBlank() }.joinToString(" - ")
-                                    Text(
-                                        text = "🔧 دستگاه: $catBrand",
-                                        fontSize = 12.sp,
-                                        color = CodyarTextSecondary,
-                                        modifier = Modifier.padding(bottom = 6.dp)
-                                    )
+                                // ۲. زمان ثبت سفارش توسط مشتری از زمان گوشی (جهت جلوگیری از اختلاف زمان)
+                                if (cleanInfo.orderPhoneTime.isNotBlank()) {
+                                    Surface(
+                                        color = Color(0xFFF0FDF4),
+                                        border = BorderStroke(1.dp, Color(0xFFBBF7D0)),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text("📱", fontSize = 14.sp)
+                                            Text(
+                                                text = "زمان ثبت سفارش توسط مشتری (زمان گوشی): ${cleanInfo.orderPhoneTime}",
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF166534)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (!isTech) {
+                                    val custCoords = o.resolvedCoordinates
+                                    val custAddress = cleanInfo.fullAddress.ifBlank { o.resolvedAddress.ifBlank { o.city ?: "" } }
+                                    if (custAddress.isNotBlank() || o.resolvedPostalCode.isNotBlank() || o.resolvedAddressNote.isNotBlank() || custCoords != null) {
+                                        TechnicianLocationCard(
+                                            fullAddress = custAddress,
+                                            postalCode = o.resolvedPostalCode,
+                                            addressNote = o.resolvedAddressNote,
+                                            coordinates = custCoords,
+                                            orderTitle = "محل سفارش ${o.resolvedOrderId}",
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+                                    }
+                                } else if (!isUnlockedForTech) {
+                                    if (!o.city.isNullOrBlank()) {
+                                        Text(
+                                            text = "📍 محدوده سفارش: ${o.city}",
+                                            fontSize = 12.sp,
+                                            color = CodyarTextSecondary,
+                                            modifier = Modifier.padding(bottom = 4.dp)
+                                        )
+                                    }
+                                    val hasLocationDetails = o.resolvedPostalCode.isNotBlank() ||
+                                            o.resolvedAddressNote.isNotBlank() || o.resolvedCoordinates != null || cleanInfo.fullAddress.isNotBlank()
+                                    if (hasLocationDetails) {
+                                        Text(
+                                            text = "🔒 آدرس دقیق، کد پستی و دکمه مسیریابی پس از پذیرش سفارش در دسترس قرار می‌گیرد",
+                                            fontSize = 10.5.sp,
+                                            color = Color(0xFFB45309),
+                                            modifier = Modifier.padding(bottom = 6.dp)
+                                        )
+                                    }
                                 }
 
                                 // If Technician: Protect Customer Contact Info & Require 15% Commission Payment First (Card-to-Card)
@@ -545,6 +629,20 @@ fun OrdersScreen(
                                                     }
                                                 }
                                             }
+                                        }
+
+                                        // زیر شماره تماس مشتری: آدرس دقیق، کد پستی و دکمه باز کردن مسیریاب
+                                        val techCoords = o.resolvedCoordinates
+                                        val techAddress = cleanInfo.fullAddress.ifBlank { o.resolvedAddress.ifBlank { o.city ?: "" } }
+                                        if (techAddress.isNotBlank() || o.resolvedPostalCode.isNotBlank() || o.resolvedAddressNote.isNotBlank() || techCoords != null) {
+                                            TechnicianLocationCard(
+                                                fullAddress = techAddress,
+                                                postalCode = o.resolvedPostalCode,
+                                                addressNote = o.resolvedAddressNote,
+                                                coordinates = techCoords,
+                                                orderTitle = "مشتری: ${o.resolvedCustomerName.ifBlank { "سفارش ${o.resolvedOrderId}" }}",
+                                                modifier = Modifier.padding(vertical = 6.dp)
+                                            )
                                         }
                                     } else {
                                         // 🔒 Locked: Hidden until 15% commission is paid (Card-to-Card)
@@ -677,14 +775,6 @@ fun OrdersScreen(
                                                 color = Color(0xFF166534),
                                                 fontWeight = FontWeight.Bold
                                             )
-                                            if (o.resolvedScheduledInfo.isNotBlank()) {
-                                                Text(
-                                                    text = "📅 زمان مراجعه: ${o.resolvedScheduledInfo}",
-                                                    fontSize = 11.sp,
-                                                    color = Color(0xFF15803D),
-                                                    modifier = Modifier.padding(top = 3.dp)
-                                                )
-                                            }
                                         }
 
                                         if (o.resolvedTechnicianPhone.isNotBlank()) {
@@ -1154,4 +1244,125 @@ fun OrdersScreen(
             }
         )
     }
+}
+
+/**
+ * مدل داده‌ای تفکیک‌شده و بدون تکرار اطلاعات سفارش برای جلوگیری از نمایش تکراری خرابی، دستگاه و تاریخ
+ */
+data class CleanOrderDisplay(
+    val problemDescription: String,
+    val deviceName: String,
+    val visitTime: String,
+    val orderPhoneTime: String,
+    val fullAddress: String
+)
+
+/**
+ * پاکسازی متن سفارش و استخراج داده‌های دستگاه، زمان مراجعه و آدرس از متن‌های مرکب گذشته
+ */
+fun parseAndCleanOrderInfo(
+    rawDescription: String,
+    resolvedCategory: String,
+    resolvedBrand: String,
+    model: String?,
+    resolvedScheduledInfo: String,
+    resolvedAddress: String
+): CleanOrderDisplay {
+    var extractedDevice: String? = null
+    var extractedVisitTime: String? = null
+    var extractedPhoneTime: String? = null
+    var extractedAddr: String? = null
+    val cleanProblemLines = mutableListOf<String>()
+
+    for (rawLine in rawDescription.lines()) {
+        val line = rawLine.trim()
+        if (line.isBlank()) continue
+        when {
+            line.startsWith("دستگاه و برند:") || line.startsWith("دستگاه:") || line.startsWith("نوع دستگاه:") -> {
+                val value = line.substringAfter(":").trim()
+                if (value.isNotBlank() && value != "عمومی") {
+                    extractedDevice = value
+                }
+            }
+            line.startsWith("زمان هماهنگ‌شده حضور تکنسین در منزل:") || line.startsWith("زمان حضور تکنسین در منزل:") ||
+            line.startsWith("زمان پیشنهادی مراجعه کارشناس:") || line.startsWith("زمان پیشنهادی:") || line.startsWith("زمان مراجعه:") -> {
+                val value = line.substringAfter(":").trim()
+                if (value.isNotBlank()) {
+                    extractedVisitTime = value
+                }
+            }
+            line.startsWith("ساعت ثبت سفارش توسط مشتری") || line.startsWith("[ساعت ثبت سفارش توسط مشتری") ||
+            line.startsWith("ساعت ثبت سفارش از زمان گوشی") || line.startsWith("[ساعت ثبت سفارش از زمان گوشی") ||
+            line.startsWith("ساعت ثبت سفارش:") || line.startsWith("[ساعت ثبت سفارش:") -> {
+                val value = line.removePrefix("[").removeSuffix("]").substringAfter(":").trim()
+                if (value.isNotBlank()) {
+                    extractedPhoneTime = value
+                }
+            }
+            line.startsWith("آدرس محل:") || line.startsWith("آدرس:") || line.startsWith("آدرس پستی:") || line.startsWith("آدرس دقیق:") -> {
+                val value = line.substringAfter(":").trim()
+                if (value.isNotBlank()) {
+                    extractedAddr = value
+                }
+            }
+            line.startsWith("لوکیشن روی نقشه:") || line.startsWith("لوکیشن:") || line.startsWith("http://") || line.startsWith("https://") -> {
+                // در کارت موقعیت و نقشه نمایش داده می‌شود
+            }
+            line.startsWith("شرح خرابی:") || line.startsWith("شرح مشکل:") || line.startsWith("مشکل:") -> {
+                val value = line.substringAfter(":").trim()
+                if (value.isNotBlank()) {
+                    cleanProblemLines.add(value)
+                }
+            }
+            else -> {
+                cleanProblemLines.add(line)
+            }
+        }
+    }
+
+    val existingCatBrand = listOf(resolvedCategory, resolvedBrand, model)
+        .filter { !it.isNullOrBlank() && it != "عمومی" }
+        .joinToString(" - ")
+
+    val finalDevice = when {
+        existingCatBrand.isNotBlank() -> existingCatBrand
+        !extractedDevice.isNullOrBlank() -> extractedDevice
+        resolvedCategory.isNotBlank() && resolvedCategory != "عمومی" -> resolvedCategory
+        else -> ""
+    }
+
+    var finalVisit = extractedVisitTime ?: ""
+    var finalPhoneTime = extractedPhoneTime ?: ""
+
+    if (resolvedScheduledInfo.isNotBlank()) {
+        if (resolvedScheduledInfo.contains("ثبت سفارش:") || resolvedScheduledInfo.contains("ساعت ثبت")) {
+            val parts = resolvedScheduledInfo.split("(", ")", "|")
+            for (p in parts) {
+                val pt = p.trim()
+                if (pt.contains("ثبت سفارش") || pt.contains("ساعت ثبت")) {
+                    if (finalPhoneTime.isBlank()) {
+                        finalPhoneTime = pt.removePrefix("ثبت سفارش:").removePrefix("ساعت ثبت:").removePrefix("ثبت سفارش").trim()
+                    }
+                } else if (pt.isNotBlank() && finalVisit.isBlank() && !pt.contains("ساعت ثبت")) {
+                    finalVisit = pt
+                }
+            }
+        } else if (finalVisit.isBlank()) {
+            finalVisit = resolvedScheduledInfo
+        }
+    }
+
+    val finalAddr = when {
+        resolvedAddress.isNotBlank() -> resolvedAddress
+        !extractedAddr.isNullOrBlank() -> extractedAddr
+        else -> ""
+    }
+
+    return CleanOrderDisplay(
+        problemDescription = cleanProblemLines.joinToString("\n").trim(),
+        deviceName = finalDevice,
+        visitTime = finalVisit,
+        orderPhoneTime = finalPhoneTime,
+        fullAddress = finalAddr
+    )
 }

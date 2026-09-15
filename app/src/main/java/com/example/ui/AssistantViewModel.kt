@@ -976,8 +976,12 @@ class AssistantViewModel(
             if (!cachedTechsJson.isNullOrEmpty()) {
                 try {
                     val techs = techniciansAdapter.fromJson(cachedTechsJson)
-                    if (!techs.isNullOrEmpty()) {
-                        _liveTechnicians.value = techs
+                    val realTechs = techs?.filter { !it.id.isNullOrBlank() && !it.id.startsWith("tech_seed") }
+                    if (!realTechs.isNullOrEmpty()) {
+                        _liveTechnicians.value = realTechs
+                    } else {
+                        _liveTechnicians.value = emptyList()
+                        sharedPrefs.edit().remove("cached_technicians_json").apply()
                     }
                 } catch (e: Exception) {
                     Log.e("AssistantViewModel", "Error parsing cached technicians", e)
@@ -989,250 +993,26 @@ class AssistantViewModel(
             if (!cachedPartsJson.isNullOrEmpty()) {
                 try {
                     val parts = sparePartsAdapter.fromJson(cachedPartsJson)
-                    if (!parts.isNullOrEmpty()) {
-                        _liveSpareParts.value = parts
+                    val realParts = parts?.filter { !it.id.isNullOrBlank() && !it.id.startsWith("part_seed") }
+                    if (!realParts.isNullOrEmpty()) {
+                        _liveSpareParts.value = realParts
+                    } else {
+                        _liveSpareParts.value = emptyList()
+                        sharedPrefs.edit().remove("cached_spare_parts_json").apply()
                     }
                 } catch (e: Exception) {
                     Log.e("AssistantViewModel", "Error parsing cached spare parts", e)
                 }
             }
 
-            // 4. If cold start without cache, seed initial verified technicians immediately
-            if (_liveTechnicians.value.isEmpty()) {
-                _liveTechnicians.value = getInitialSeedTechnicians()
-            }
-
-            // 5. If cold start without cache, seed initial store spare parts immediately
-            if (_liveSpareParts.value.isEmpty()) {
-                _liveSpareParts.value = getInitialSeedSpareParts()
-            }
-
             _isDatabaseLoading.value = false
             _isTechniciansLoading.value = false
             _isSparePartsLoading.value = false
-            Log.d("AssistantViewModel", "Instant local data loaded in blink of an eye for technicians, store parts, and database.")
+            Log.d("AssistantViewModel", "Instant local data loaded for technicians, store parts, and database.")
         } catch (e: Exception) {
             Log.e("AssistantViewModel", "Failed to load cached database.", e)
         }
         ensureDefaultFilters()
-    }
-
-    private fun getInitialSeedTechnicians(): List<KodyarTechnician> {
-        return listOf(
-            KodyarTechnician(
-                id = "tech_seed_1",
-                name = "مهندس علیرضا رضایی",
-                phone = "09121234567",
-                city = "تهران",
-                cityName = "تهران",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 142,
-                bio = "متخصص ارشد تعمیرات بردهای الکترونیکی و انواع ماشین لباسشویی و ظرفشویی ال‌جی، سامسونگ و بوش",
-                categories = listOf("ماشین لباسشویی", "ماشین ظرفشویی"),
-                rating = 4.9,
-                satisfactionRate = 98
-            ),
-            KodyarTechnician(
-                id = "tech_seed_2",
-                name = "استاد محمد حسینی",
-                phone = "09129876543",
-                city = "تهران",
-                cityName = "تهران",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 189,
-                bio = "تکنسین مجاز انواع ساید بای ساید و یخچال فریزر با ۱۵ سال سابقه کار تخصصی",
-                categories = listOf("یخچال و فریزر"),
-                rating = 5.0,
-                satisfactionRate = 100
-            ),
-            KodyarTechnician(
-                id = "tech_seed_3",
-                name = "مهندس حسین کاظمی",
-                phone = "09181112233",
-                city = "اراک",
-                cityName = "اراک",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 97,
-                bio = "سرویس و عیب‌یابی انواع پکیج‌های دیواری ایران رادیاتور، بوتان و کولر گازی اسپلیت",
-                categories = listOf("پکیج و رادیاتور", "کولر گازی"),
-                rating = 4.8,
-                satisfactionRate = 97
-            ),
-            KodyarTechnician(
-                id = "tech_seed_4",
-                name = "مهندس مهدی ابراهیمی",
-                phone = "09133334455",
-                city = "اصفهان",
-                cityName = "اصفهان",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 115,
-                bio = "تعمیرکار مجرب لوازم خانگی بزرگ، لباسشویی، ظرفشویی و ساید بای ساید در اصفهان",
-                categories = listOf("ماشین لباسشویی", "یخچال و فریزر"),
-                rating = 4.9,
-                satisfactionRate = 99
-            ),
-            KodyarTechnician(
-                id = "tech_seed_5",
-                name = "استاد علی اکبر مرادی",
-                phone = "09155556677",
-                city = "مشهد",
-                cityName = "مشهد",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 164,
-                bio = "عیب‌یابی تخصصی و رفع ارورهای انواع پکیج، کولر گازی و سیستم‌های سرمایشی",
-                categories = listOf("پکیج و رادیاتور", "کولر گازی"),
-                rating = 5.0,
-                satisfactionRate = 100
-            ),
-            KodyarTechnician(
-                id = "tech_seed_6",
-                name = "مهندس رضا کریمی",
-                phone = "09217778899",
-                city = "کرج",
-                cityName = "کرج",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 128,
-                bio = "تعمیر تخصصی انواع برد و قطعات لباسشویی و ظرفشویی اینورتر سامسونگ و ال‌جی",
-                categories = listOf("ماشین لباسشویی", "ماشین ظرفشویی"),
-                rating = 4.9,
-                satisfactionRate = 98
-            ),
-            KodyarTechnician(
-                id = "tech_seed_7",
-                name = "استاد سعید صادقی",
-                phone = "09171113344",
-                city = "شیراز",
-                cityName = "شیراز",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 108,
-                bio = "تعمیرکار مجاز یخچال، فریزر و سیستم‌های برودتی خانگی و صنعتی",
-                categories = listOf("یخچال و فریزر"),
-                rating = 4.8,
-                satisfactionRate = 96
-            ),
-            KodyarTechnician(
-                id = "tech_seed_8",
-                name = "مهندس جعفر نوبخت",
-                phone = "09144445566",
-                city = "تبریز",
-                cityName = "تبریز",
-                isVerified = true,
-                is_verified = true,
-                is_approved = true,
-                completedOrders = 92,
-                bio = "متخصص نصب، سرویس دوره‌ای و تعمیرات پکیج دیواری و رادیاتور در تبریز",
-                categories = listOf("پکیج و رادیاتور"),
-                rating = 4.9,
-                satisfactionRate = 98
-            )
-        )
-    }
-
-    private fun getInitialSeedSpareParts(): List<KodyarSparePart> {
-        return listOf(
-            KodyarSparePart(
-                id = "part_seed_1",
-                name = "پمپ تخلیه ماشین لباسشویی بوش و ال جی",
-                brand = "بوش / ال جی",
-                category = "ماشین لباسشویی",
-                device_category = "ماشین لباسشویی",
-                price = 380000.0,
-                stock = 15,
-                stock_quantity = 15,
-                description = "پمپ تخلیه فابریک اورجینال ۸ پره مناسب برای انواع ماشین‌های لباسشویی اتوماتیک"
-            ),
-            KodyarSparePart(
-                id = "part_seed_2",
-                name = "شیر برقی دو قلو ماشین لباسشویی سامسونگ",
-                brand = "سامسونگ",
-                category = "ماشین لباسشویی",
-                device_category = "ماشین لباسشویی",
-                price = 260000.0,
-                stock = 24,
-                stock_quantity = 24,
-                description = "شیر برقی ورودی آب سرد و گرم دو قلو با فیلتر استیل ضد رسوب"
-            ),
-            KodyarSparePart(
-                id = "part_seed_3",
-                name = "سنسور دیفراست و ترموفیوز یخچال فریزر ال جی",
-                brand = "ال جی",
-                category = "یخچال و فریزر",
-                device_category = "یخچال و فریزر",
-                price = 195000.0,
-                stock = 18,
-                stock_quantity = 18,
-                description = "سنسور سنجش دمای اواپراتور و دیفراست به همراه فیوز حرارتی ۷۲ درجه فابریک"
-            ),
-            KodyarSparePart(
-                id = "part_seed_4",
-                name = "برد اینورتر کمپرسور یخچال ساید بای ساید سامسونگ",
-                brand = "سامسونگ",
-                category = "یخچال و فریزر",
-                device_category = "یخچال و فریزر",
-                price = 1450000.0,
-                stock = 8,
-                stock_quantity = 8,
-                description = "برد راه انداز موتور اینورتر دیجیتال اصلی مناسب برای ساید بای ساید سری فرنچ و رومانو"
-            ),
-            KodyarSparePart(
-                id = "part_seed_5",
-                name = "میکروسوئیچ و قفل حرارتی درب لباسشویی بوش",
-                brand = "بوش",
-                category = "ماشین لباسشویی",
-                device_category = "ماشین لباسشویی",
-                price = 320000.0,
-                stock = 12,
-                stock_quantity = 12,
-                description = "قفل برقی درب با رله حرارتی PTC مدل اورجینال ساخت ایتالیا و آلمان"
-            ),
-            KodyarSparePart(
-                id = "part_seed_6",
-                name = "المنت حرارتی کف ماشین ظرفشویی ال جی و سامسونگ",
-                brand = "ال جی",
-                category = "ماشین ظرفشویی",
-                device_category = "ماشین ظرفشویی",
-                price = 540000.0,
-                stock = 9,
-                stock_quantity = 9,
-                description = "هیتر لوله‌ای ۲۰۰۰ وات از جنس استیل ۳۱۶ مقاوم در برابر خوردگی نمک ظرفشویی"
-            ),
-            KodyarSparePart(
-                id = "part_seed_7",
-                name = "خازن روغنی راه‌انداز کمپرسور کولر گازی ۵۰ میکروفاراد",
-                brand = "جنرال",
-                category = "کولر گازی",
-                device_category = "کولر گازی",
-                price = 185000.0,
-                stock = 30,
-                stock_quantity = 30,
-                description = "خازن دائم کار ۴۵۰ ولت AC استوانه‌ای فلزی ضد انفجار برای اسپلیت ۱۸۰۰۰ و ۲۴۰۰۰"
-            ),
-            KodyarSparePart(
-                id = "part_seed_8",
-                name = "فیلتر تصفیه آب داخلی یخچال ساید بای ساید موشکی",
-                brand = "عمومی",
-                category = "یخچال و فریزر",
-                device_category = "یخچال و فریزر",
-                price = 290000.0,
-                stock = 45,
-                stock_quantity = 45,
-                description = "فیلتر کربن فعال آنتی‌باکتریال با قابلیت حذف کلر و املاح معلق آب"
-            )
-        )
     }
 
     private fun ensureDefaultFilters() {
@@ -1868,7 +1648,7 @@ class AssistantViewModel(
         }
     }
 
-    fun sendOtp(phone: String, onResult: (Boolean, String?) -> Unit) {
+    fun sendOtp(phone: String, onResult: (Boolean, String?, String?) -> Unit) {
         val cleanPhone = normalizePhone(phone)
         viewModelScope.launch {
             _isAuthLoading.value = true
@@ -1876,16 +1656,22 @@ class AssistantViewModel(
             try {
                 val res = repository.sendOtp(cleanPhone)
                 if (res.status == "ok" || res.status == "success" || res.message?.contains("ارسال") == true) {
-                    onResult(true, res.message ?: "کد تایید با موفقیت پیامک شد")
+                    val directOtp = res.otp?.takeIf { it.isNotBlank() }
+                        ?: com.example.data.utils.SmsOtpHelper.extractOtp(res.message ?: "")
+                    onResult(true, res.message ?: "کد تایید با موفقیت پیامک شد", directOtp)
                 } else {
-                    onResult(false, res.error ?: res.message ?: "خطا در ارسال کد پیامک")
+                    onResult(false, res.error ?: res.message ?: "خطا در ارسال کد پیامک", null)
                 }
             } catch (e: Exception) {
-                onResult(false, "خطا در برقراری ارتباط: ${e.localizedMessage}")
+                onResult(false, "خطا در برقراری ارتباط: ${e.localizedMessage}", null)
             } finally {
                 _isAuthLoading.value = false
             }
         }
+    }
+
+    fun sendOtp(phone: String, onResult: (Boolean, String?) -> Unit) {
+        sendOtp(phone) { success, msg, _ -> onResult(success, msg) }
     }
 
     fun verifyOtp(phone: String, code: String, newPassword: String? = null, onResult: (Boolean, String?) -> Unit) {
@@ -3266,6 +3052,12 @@ class AssistantViewModel(
         customerPhone: String? = null,
         address: String? = null,
         region: String? = null,
+        postalCode: String? = null,
+        latitude: Double? = null,
+        longitude: Double? = null,
+        locationUrl: String? = null,
+        addressNote: String? = null,
+        scheduledDate: String? = null,
         onResult: (Boolean, String?) -> Unit
     ) {
         val token = getSessionToken()
@@ -3299,7 +3091,13 @@ class AssistantViewModel(
                     customerPhone = customerPhone ?: user?.phone,
                     address = address,
                     technicianId = techId,
-                    region = region ?: user?.province ?: user?.city
+                    region = region ?: user?.province ?: user?.city,
+                    postalCode = postalCode,
+                    latitude = latitude,
+                    longitude = longitude,
+                    locationUrl = locationUrl,
+                    addressNote = addressNote,
+                    scheduledDate = scheduledDate
                 )
                 if (response.status == "ok" || response.status == "success") {
                     loadRepairs()

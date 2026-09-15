@@ -385,31 +385,19 @@ fun SearchScreen(
             // Results List
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(7.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(searchResults, key = { it.id ?: "${it.code}_${it.brand}_${it.category}" }) { err ->
-                    val severityLevel = err.hazardLevel ?: "medium"
-                    val (color, bg, label) = when (severityLevel) {
-                        "high" -> Triple(Color(0xFFC0392B), Color(0xFFFDF0EE), "خطرناک")
-                        "low" -> Triple(Color(0xFF1E8449), Color(0xFFEAFAF1), "کم‌خطر")
-                        else -> Triple(Color(0xFFD68910), Color(0xFFFEF9E7), "متوسط")
-                    }
+                    val devCat = err.resolvedCategory
+                    val br = err.brand?.trim()?.takeIf { it.isNotBlank() && it != "عمومی" }
+                    val md = err.model?.trim()?.takeIf { it.isNotBlank() }
+                    val brandCatText = if (br != null) "$devCat · $br" else devCat
 
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                if (isPremium) {
-                                    onSelectError(err)
-                                } else {
-                                    if (freeErrorCount < 1) {
-                                        viewModel.useFreeCount("error") {
-                                            onSelectError(err)
-                                        }
-                                    } else {
-                                        onShowPlans()
-                                    }
-                                }
+                                onSelectError(err)
                             },
                         colors = CardDefaults.cardColors(containerColor = CodyarSurface),
                         shape = RoundedCornerShape(12.dp),
@@ -418,52 +406,97 @@ fun SearchScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(11.dp)
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            // Jadar and wide error code box (fits long codes like "40 60 80", "CR CF")
                             Box(
                                 modifier = Modifier
-                                    .size(44.dp)
-                                    .background(Color(0xFFF0F2F5), RoundedCornerShape(9.dp)),
+                                    .defaultMinSize(minWidth = 60.dp, minHeight = 44.dp)
+                                    .background(Color(0xFFF0F4F8), RoundedCornerShape(10.dp))
+                                    .border(1.dp, Color(0xFFD9E2EC), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = err.code ?: "",
-                                    fontSize = 12.sp,
+                                    text = err.resolvedCode,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = CodyarTextPrimary
+                                    color = CodyarNavy,
+                                    textAlign = TextAlign.Center
                                 )
                             }
 
+                            // Device info (category, brand, model) - NO error title/causes shown to protect subscription!
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = err.title ?: err.code ?: "",
+                                    text = brandCatText,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = CodyarTextPrimary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Text(
-                                    text = err.deviceBrandModelSummary,
-                                    fontSize = 11.sp,
-                                    color = CodyarTextSecondary
-                                )
+
+                                if (md != null) {
+                                    Text(
+                                        text = "مدل: $md",
+                                        fontSize = 11.sp,
+                                        color = CodyarTextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.padding(top = 1.dp)
+                                    )
+                                }
+
+                                if (isPremium) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFF1E8449),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text = "مشاهده راهنمای کامل عیب‌یابی",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF1E8449),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                } else {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = Color(0xFFD97706),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text = "علت و رفع عیب (نیازمند اشتراک)",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFFD97706),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
                             }
 
-                            Box(
-                                modifier = Modifier
-                                    .background(bg, RoundedCornerShape(5.dp))
-                                    .padding(horizontal = 7.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    text = label,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = color
-                                )
-                            }
+                            Icon(
+                                imageVector = if (isPremium) Icons.Default.ArrowForward else Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (isPremium) CodyarNavy.copy(alpha = 0.5f) else Color(0xFFD97706),
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                 }
@@ -558,44 +591,77 @@ fun SearchScreen(
                 shape = RoundedCornerShape(14.dp)
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    // Header colored based on hazard level
+                    // Header: colored based on hazard level if premium, else neutral CodyarNavy
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(themeColor)
-                            .padding(horizontal = 16.dp, vertical = 18.dp)
+                            .background(if (isPremium) themeColor else CodyarNavy)
+                            .padding(horizontal = 16.dp, vertical = 16.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            // Jadar error code box (fits long codes like "40 60 80")
                             Box(
                                 modifier = Modifier
-                                    .size(50.dp)
-                                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp)),
+                                    .defaultMinSize(minWidth = 56.dp, minHeight = 48.dp)
+                                    .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = err.code ?: "",
+                                    text = err.resolvedCode,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    color = Color.White,
+                                    textAlign = TextAlign.Center
                                 )
                             }
 
-                            Column {
-                                Text(
-                                    text = err.title ?: "بررسی ارور ${err.code}",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                    color = Color.White
-                                )
-                                Text(
-                                    text = err.deviceBrandModelSummary,
-                                    fontSize = 11.sp,
-                                    color = Color.White.copy(alpha = 0.75f),
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
+                            Column(modifier = Modifier.weight(1f)) {
+                                if (isPremium) {
+                                    Text(
+                                        text = err.title ?: "بررسی ارور ${err.resolvedCode}",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "${err.resolvedCategory} · ${err.brand ?: "عمومی"}${if (!err.model.isNullOrBlank()) " · مدل: ${err.model}" else ""}",
+                                        fontSize = 11.sp,
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "کد خطا: ${err.resolvedCode}",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "${err.resolvedCategory} · ${err.brand ?: "عمومی"}${if (!err.model.isNullOrBlank()) " · مدل: ${err.model}" else ""}",
+                                        fontSize = 12.sp,
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                            }
+
+                            if (isPremium) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = titleText,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                }
                             }
                         }
                     }
@@ -605,114 +671,261 @@ fun SearchScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // Description
-                        if (!err.description.isNullOrBlank()) {
-                            Column {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier.padding(bottom = 9.dp)
-                                ) {
-                                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFD68910), modifier = Modifier.size(14.dp))
-                                    Text("توضیح خطا", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
-                                }
-
-                                Text(
-                                    text = err.description,
-                                    fontSize = 15.sp,
-                                    color = CodyarTextPrimary,
-                                    lineHeight = 30.sp,
+                        if (!isPremium) {
+                            // Non-premium locked view: hides title, description, causes, steps, precautions, hazardLevel
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF9E7)),
+                                border = BorderStroke(1.dp, Color(0xFFFDEBD0)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(Color(0xFFFEF9E7), RoundedCornerShape(10.dp))
-                                        .border(BorderStroke(1.dp, Color(0xFFFEF9E7)))
-                                        .padding(14.dp)
-                                )
-                            }
-                        }
-
-                        // Causes List
-                        val causesList = with(viewModel) { err.causes.toListOfStrings() }
-                        if (causesList.isNotEmpty()) {
-                            Column {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier.padding(bottom = 9.dp)
+                                        .padding(18.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFC0392B), modifier = Modifier.size(14.dp))
-                                    Text("علت‌های احتمالی", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
-                                }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(50.dp)
+                                            .background(Color(0xFFD97706).copy(alpha = 0.15f), CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = Color(0xFFD97706),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
 
-                                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    causesList.forEachIndexed { i, cause ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .background(Color(0xFFFDF0EE), RoundedCornerShape(9.dp))
-                                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Text(
-                                                text = "${i + 1}.",
-                                                color = Color(0xFFC0392B),
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                            Text(
-                                                text = cause,
-                                                fontSize = 15.sp,
-                                                color = CodyarTextPrimary,
-                                                lineHeight = 26.sp
-                                            )
-                                        }
+                                    Text(
+                                        text = "راهنمای تخصصی عیب‌یابی قفل است",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CodyarTextPrimary,
+                                        textAlign = TextAlign.Center
+                                    )
+
+                                    Text(
+                                        text = "برای دسترسی به شرح کامل خطا، علت‌های احتمالی خرابی، مراحل رفع عیب، نکات احتیاطی و درجه خطر دستگاه ${err.brand ?: ""}، لطفاً اشتراک خود را فعال کنید.",
+                                        fontSize = 12.sp,
+                                        color = CodyarTextSecondary,
+                                        textAlign = TextAlign.Center,
+                                        lineHeight = 20.sp
+                                    )
+
+                                    Button(
+                                        onClick = onShowPlans,
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("خرید و فعال‌سازی اشتراک", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
-                        }
-
-                        // Steps list
-                        val stepsList = with(viewModel) { err.steps.toListOfStrings() }
-                        if (stepsList.isNotEmpty()) {
-                            Column {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier.padding(bottom = 9.dp)
-                                ) {
-                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF1E8449), modifier = Modifier.size(14.dp))
-                                    Text("مراحل رفع مشکل", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
+                        } else {
+                            // Premium full diagnosis: Pattern (code, category, brand, model, title, description, causes, steps, precautions, hazardLevel)
+                            
+                            // 5. Title
+                            if (!err.title.isNullOrBlank()) {
+                                Column {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.padding(bottom = 6.dp)
+                                    ) {
+                                        Icon(Icons.Default.Build, contentDescription = null, tint = CodyarNavy, modifier = Modifier.size(14.dp))
+                                        Text("عنوان تخصصی خطا", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
+                                    }
+                                    Text(
+                                        text = err.title,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CodyarNavy,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(Color(0xFFF0F4F8), RoundedCornerShape(10.dp))
+                                            .padding(12.dp)
+                                    )
                                 }
+                            }
 
-                                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    stepsList.forEachIndexed { i, step ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .background(Color(0xFFEAFAF1), RoundedCornerShape(9.dp))
-                                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Box(
+                            // 6. Description
+                            if (!err.description.isNullOrBlank()) {
+                                Column {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.padding(bottom = 9.dp)
+                                    ) {
+                                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFD68910), modifier = Modifier.size(14.dp))
+                                        Text("توضیح خطا", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
+                                    }
+
+                                    Text(
+                                        text = err.description,
+                                        fontSize = 15.sp,
+                                        color = CodyarTextPrimary,
+                                        lineHeight = 30.sp,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(Color(0xFFFEF9E7), RoundedCornerShape(10.dp))
+                                            .border(BorderStroke(1.dp, Color(0xFFFEF9E7)))
+                                            .padding(14.dp)
+                                    )
+                                }
+                            }
+
+                            // 7. Causes List
+                            val causesList = with(viewModel) { err.causes.toListOfStrings() }
+                            if (causesList.isNotEmpty()) {
+                                Column {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.padding(bottom = 9.dp)
+                                    ) {
+                                        Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFC0392B), modifier = Modifier.size(14.dp))
+                                        Text("علت‌های احتمالی خرابی", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
+                                    }
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        causesList.forEachIndexed { i, cause ->
+                                            Row(
                                                 modifier = Modifier
-                                                    .size(22.dp)
-                                                    .background(Color(0xFF1E8449), CircleShape),
-                                                contentAlignment = Alignment.Center
+                                                    .fillMaxWidth()
+                                                    .background(Color(0xFFFDF0EE), RoundedCornerShape(9.dp))
+                                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                                             ) {
                                                 Text(
-                                                    text = (i + 1).toString(),
-                                                    color = Color.White,
-                                                    fontSize = 12.sp,
+                                                    text = "${i + 1}.",
+                                                    color = Color(0xFFC0392B),
                                                     fontWeight = FontWeight.Bold
                                                 )
+                                                Text(
+                                                    text = cause,
+                                                    fontSize = 15.sp,
+                                                    color = CodyarTextPrimary,
+                                                    lineHeight = 26.sp
+                                                )
                                             }
-                                            Text(
-                                                text = step,
-                                                fontSize = 15.sp,
-                                                color = CodyarTextPrimary,
-                                                lineHeight = 26.sp
-                                            )
                                         }
                                     }
+                                }
+                            }
+
+                            // 8. Steps list
+                            val stepsList = with(viewModel) { err.steps.toListOfStrings() }
+                            if (stepsList.isNotEmpty()) {
+                                Column {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.padding(bottom = 9.dp)
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF1E8449), modifier = Modifier.size(14.dp))
+                                        Text("مراحل رفع مشکل", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
+                                    }
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        stepsList.forEachIndexed { i, step ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(Color(0xFFEAFAF1), RoundedCornerShape(9.dp))
+                                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(22.dp)
+                                                        .background(Color(0xFF1E8449), CircleShape),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text(
+                                                        text = (i + 1).toString(),
+                                                        color = Color.White,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                                Text(
+                                                    text = step,
+                                                    fontSize = 15.sp,
+                                                    color = CodyarTextPrimary,
+                                                    lineHeight = 26.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 9. Precautions
+                            val precautionsList = with(viewModel) { err.resolvedPrecautions.toListOfStrings() }
+                            if (precautionsList.isNotEmpty()) {
+                                Column {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.padding(bottom = 9.dp)
+                                    ) {
+                                        Icon(Icons.Default.Security, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(14.dp))
+                                        Text("نکات ایمنی و احتیاطی", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CodyarTextPrimary)
+                                    }
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        precautionsList.forEach { precaution ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(Color(0xFFEFF6FF), RoundedCornerShape(9.dp))
+                                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Info,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF2563EB),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Text(
+                                                    text = precaution,
+                                                    fontSize = 14.sp,
+                                                    color = CodyarTextPrimary,
+                                                    lineHeight = 24.sp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 10. Hazard Level details
+                            if (!err.hazardLevel.isNullOrBlank()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(bgText, RoundedCornerShape(10.dp))
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = themeColor, modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = "درجه خطر دستگاه: $titleText",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = themeColor
+                                    )
                                 }
                             }
                         }

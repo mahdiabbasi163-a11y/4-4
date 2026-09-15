@@ -244,6 +244,9 @@ data class KodyarErrorCode(
     val causes: Any? = null,
     val steps: Any? = null,
     val solutions: Any? = null,
+    val precautions: Any? = null,
+    @Json(name = "safety_precautions") val safety_precautions: Any? = null,
+    @Json(name = "precautions") val precautions_alt: Any? = null,
     val hazardLevel: String? = null,
     @Json(name = "hazard_level") val hazard_level: String? = null,
     val videoUrl: String? = null,
@@ -263,6 +266,9 @@ data class KodyarErrorCode(
 
     val resolvedSteps: Any?
         get() = steps ?: solutions
+
+    val resolvedPrecautions: Any?
+        get() = precautions ?: safety_precautions ?: precautions_alt
 
     val resolvedVideoUrl: String?
         get() {
@@ -774,6 +780,18 @@ data class KodyarRepairOrder(
     val city: String? = null,
     val region: String? = null,
     val address: String? = null,
+    val full_address: String? = null,
+    val fullAddress: String? = null,
+    val postal_code: String? = null,
+    val postalCode: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val lat: Double? = null,
+    val lng: Double? = null,
+    val location_url: String? = null,
+    val locationUrl: String? = null,
+    val address_note: String? = null,
+    val addressNote: String? = null,
     val status: String? = null, // pending, assigned, accepted, in_progress, ongoing, completed, done, cancelled, rejected
     val status_label_fa: String? = null,
     val statusLabelFa: String? = null,
@@ -813,25 +831,110 @@ data class KodyarRepairOrder(
         get() {
             val d = resolvedScheduledDate
             val t = resolvedScheduledTime
-            return when {
-                d.isNotBlank() && t.isNotBlank() -> "تاریخ: $d - ساعت: $t"
-                d.isNotBlank() -> "تاریخ: $d"
-                t.isNotBlank() -> "ساعت: $t"
-                else -> ""
+            if (d.isNotBlank() || t.isNotBlank()) {
+                return when {
+                    d.isNotBlank() && t.isNotBlank() -> if (d.contains("ساعت")) "$d (تکمیلی: $t)" else "تاریخ: $d - ساعت: $t"
+                    d.isNotBlank() -> if (d.contains("ساعت") || d.startsWith("روز") || d.startsWith("تاریخ")) d else "تاریخ: $d"
+                    t.isNotBlank() -> "ساعت: $t"
+                    else -> ""
+                }
             }
+            val raw = listOfNotNull(description, problem_description, problemDescription).firstOrNull { it.isNotBlank() } ?: ""
+            for (line in raw.lines()) {
+                val tr = line.trim()
+                if (tr.startsWith("زمان پیشنهادی مراجعه کارشناس:") || tr.startsWith("زمان پیشنهادی:") || tr.startsWith("زمان مراجعه:")) {
+                    return tr.substringAfter(":").trim()
+                }
+                if (tr.startsWith("[ساعت ثبت سفارش از زمان گوشی:") || tr.startsWith("ساعت ثبت سفارش از زمان گوشی:")) {
+                    return tr.removePrefix("[").removeSuffix("]").trim()
+                }
+            }
+            return ""
         }
 
     val resolvedDescription: String
         get() = listOfNotNull(description, problem_description, problemDescription).firstOrNull { it.isNotBlank() } ?: ""
 
     val resolvedCategory: String
-        get() = listOfNotNull(category, device_category, appliance).firstOrNull { it.isNotBlank() } ?: ""
+        get() {
+            val direct = listOfNotNull(category, device_category, appliance).firstOrNull { it.isNotBlank() && it != "عمومی" }
+            if (direct != null) return direct
+            val raw = listOfNotNull(description, problem_description, problemDescription).firstOrNull { it.isNotBlank() } ?: ""
+            for (line in raw.lines()) {
+                val tr = line.trim()
+                if (tr.startsWith("دستگاه و برند:") || tr.startsWith("دستگاه:") || tr.startsWith("نوع دستگاه:")) {
+                    return tr.substringAfter(":").trim()
+                }
+            }
+            return listOfNotNull(category, device_category, appliance).firstOrNull { it.isNotBlank() } ?: ""
+        }
 
     val resolvedBrand: String
-        get() = listOfNotNull(brand, device_brand).firstOrNull { it.isNotBlank() } ?: ""
+        get() = listOfNotNull(brand, device_brand).firstOrNull { it.isNotBlank() && it != "عمومی" } ?: ""
 
     val resolvedDate: String
         get() = listOfNotNull(shamsi_date, shamsiDate, created_at).firstOrNull { it.isNotBlank() } ?: ""
+
+    /** آدرس کامل پستی مشتری، با پشتیبانی از هر دو نام‌گذاری سرور و فال‌بک از متن سفارش. */
+    val resolvedAddress: String
+        get() {
+            val direct = listOfNotNull(full_address, fullAddress, address).firstOrNull { it.isNotBlank() }
+            if (!direct.isNullOrBlank()) return direct
+            val raw = listOfNotNull(description, problem_description, problemDescription).firstOrNull { it.isNotBlank() } ?: ""
+            for (line in raw.lines()) {
+                val tr = line.trim()
+                if (tr.startsWith("آدرس محل:") || tr.startsWith("آدرس:") || tr.startsWith("آدرس دقیق:")) {
+                    return tr.substringAfter(":").trim()
+                }
+            }
+            return ""
+        }
+
+    /** کد پستی ۱۰ رقمی محل سفارش. */
+    val resolvedPostalCode: String
+        get() = listOfNotNull(postal_code, postalCode).firstOrNull { it.isNotBlank() } ?: ""
+
+    /** توضیح مسیر و نشانه محل. */
+    val resolvedAddressNote: String
+        get() = listOfNotNull(address_note, addressNote).firstOrNull { it.isNotBlank() } ?: ""
+
+    /** مختصات ثبت‌شده توسط مشتری، در صورت وجود یا استخراج از لینک/متن سفارش. */
+    val resolvedCoordinates: Pair<Double, Double>?
+        get() {
+            val la = latitude ?: lat
+            val ln = longitude ?: lng
+            if (la != null && ln != null && la != 0.0 && ln != 0.0) return la to ln
+
+            val candidateSources = listOfNotNull(
+                location_url,
+                locationUrl,
+                full_address,
+                fullAddress,
+                address,
+                problem_description,
+                description
+            )
+            val regex = Regex("""(-?\d{1,2}\.\d{3,})\s*[,/]\s*(-?\d{1,3}\.\d{3,})""")
+            for (text in candidateSources) {
+                if (text.isNotBlank()) {
+                    val match = regex.find(text)
+                    if (match != null) {
+                        val parsedLat = match.groupValues[1].toDoubleOrNull()
+                        val parsedLng = match.groupValues[2].toDoubleOrNull()
+                        if (parsedLat != null && parsedLng != null && parsedLat in -90.0..90.0 && parsedLng in -180.0..180.0) {
+                            return parsedLat to parsedLng
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+    /** لینک نقشه محل سفارش؛ اگر سرور نداشته باشد از مختصات ساخته می‌شود. */
+    val resolvedLocationUrl: String
+        get() = listOfNotNull(location_url, locationUrl).firstOrNull { it.isNotBlank() }
+            ?: resolvedCoordinates?.let { "https://maps.google.com/?q=${it.first},${it.second}" }
+            ?: ""
 }
 
 @JsonClass(generateAdapter = true)
@@ -912,6 +1015,15 @@ data class RepairRequest(
     @Json(name = "problem_description") val problem_description: String? = null,
     @Json(name = "description") val description: String? = null,
     val address: String? = null,
+    @Json(name = "full_address") val full_address: String? = null,
+    @Json(name = "postal_code") val postal_code: String? = null,
+    @Json(name = "postalCode") val postalCode: String? = null,
+    @Json(name = "latitude") val latitude: Double? = null,
+    @Json(name = "longitude") val longitude: Double? = null,
+    @Json(name = "location_url") val location_url: String? = null,
+    @Json(name = "address_note") val address_note: String? = null,
+    @Json(name = "scheduled_date") val scheduled_date: String? = null,
+    @Json(name = "scheduledDate") val scheduledDate: String? = null,
     val brand: String = "",
     val model: String? = null,
     @Json(name = "error_code") val error_code: String? = null,

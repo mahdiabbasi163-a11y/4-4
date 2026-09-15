@@ -143,18 +143,6 @@ fun SupportTicketDialog(
                             }
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (screenMode == TicketScreenMode.LIST) {
-                                    IconButton(
-                                        onClick = { viewModel.loadUserTickets() },
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Refresh,
-                                            contentDescription = "بروزرسانی",
-                                            tint = Color.White
-                                        )
-                                    }
-                                }
                                 IconButton(
                                     onClick = onDismiss,
                                     modifier = Modifier.size(36.dp)

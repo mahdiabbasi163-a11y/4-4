@@ -20,7 +20,7 @@ android {
     applicationId = "ir.novincol.com"
     minSdk = 24
     targetSdk = 36
-    versionCode = 37
+    versionCode = 38
     versionName = "2.1.2"
     buildConfigField("String", "BASE_URL", "\"https://kodyar24.ir/api/\"")
 

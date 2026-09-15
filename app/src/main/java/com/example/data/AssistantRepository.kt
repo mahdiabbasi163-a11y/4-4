@@ -613,7 +613,13 @@ class AssistantRepository(
         customerPhone: String? = null,
         address: String? = null,
         technicianId: String? = null,
-        region: String? = null
+        region: String? = null,
+        postalCode: String? = null,
+        latitude: Double? = null,
+        longitude: Double? = null,
+        locationUrl: String? = null,
+        addressNote: String? = null,
+        scheduledDate: String? = null
     ): com.example.data.model.KodyarResponse = withContext(Dispatchers.IO) {
         val finalTechId = if (technicianId.isNullOrBlank()) null else technicianId
         val normalizedPhone = normalizeIranianPhone(customerPhone) ?: customerPhone
@@ -629,6 +635,15 @@ class AssistantRepository(
             problem_description = problemDescription,
             description = problemDescription,
             address = address,
+            full_address = address,
+            postal_code = postalCode,
+            postalCode = postalCode,
+            latitude = latitude,
+            longitude = longitude,
+            location_url = locationUrl ?: latitude?.let { la -> longitude?.let { ln -> "https://maps.google.com/?q=$la,$ln" } },
+            address_note = addressNote,
+            scheduled_date = scheduledDate,
+            scheduledDate = scheduledDate,
             brand = brand,
             model = model,
             error_code = errorCode,

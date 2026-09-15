@@ -1,8 +1,13 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,8 +38,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.data.repository.ErrorCodeRepository
+import com.example.data.utils.SmsOtpHelper
 import com.example.ui.AssistantViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -81,6 +88,56 @@ fun AuthDialog(
     var isForgotPasswordMode by remember { mutableStateOf(false) }
     var otpCodeInput by remember { mutableStateOf("") }
     var otpTimerSeconds by remember { mutableIntStateOf(120) }
+    var autoFilledSms by remember { mutableStateOf(false) }
+    var hasSmsPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasSmsPermission = isGranted
+        if (isGranted) {
+            val inboxOtp = SmsOtpHelper.readRecentOtpFromInbox(context)
+            if (!inboxOtp.isNullOrBlank() && otpCodeInput.isBlank()) {
+                otpCodeInput = inboxOtp
+                autoFilledSms = true
+            }
+        }
+    }
+
+    // دریافت خودکار کد تایید پیامک‌شده در صورتی که سیم‌کارت روی همین گوشی باشد
+    DisposableEffect(isForgotPasswordMode) {
+        var smsReceiver: BroadcastReceiver? = null
+        if (isForgotPasswordMode) {
+            // ۱. بررسی پیامک‌های دریافتی اخیر از اینباکس
+            val inboxOtp = SmsOtpHelper.readRecentOtpFromInbox(context)
+            if (!inboxOtp.isNullOrBlank() && otpCodeInput.isBlank()) {
+                otpCodeInput = inboxOtp
+                autoFilledSms = true
+            }
+
+            // ۲. ثبت لیسنر آنلاین برای شنود پیامک دریافتی
+            smsReceiver = SmsOtpHelper.registerSmsListener(context) { code ->
+                otpCodeInput = code
+                autoFilledSms = true
+                Toast.makeText(context, "کد تایید پیامک‌شده ($code) به‌صورت خودکار درج شد ✓", Toast.LENGTH_SHORT).show()
+                // اعتبارسنجی خودکار بدون معطلی کاربر
+                viewModel.verifyOtp(authPhone, code, authPassword.ifBlank { null }) { success, msg ->
+                    if (success) {
+                        isForgotPasswordMode = false
+                        onDismiss()
+                        Toast.makeText(context, msg ?: "ورود به حساب با موفقیت انجام شد!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        onDispose {
+            SmsOtpHelper.unregisterSmsListener(context, smsReceiver)
+        }
+    }
 
     LaunchedEffect(isForgotPasswordMode, otpTimerSeconds) {
         if (isForgotPasswordMode && otpTimerSeconds > 0) {
@@ -297,26 +354,101 @@ fun AuthDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFFEFF6FF), RoundedCornerShape(10.dp))
-                            .border(1.dp, Color(0xFF93C5FD), RoundedCornerShape(10.dp))
+                            .background(if (autoFilledSms) Color(0xFFF0FDF4) else Color(0xFFEFF6FF), RoundedCornerShape(10.dp))
+                            .border(1.dp, if (autoFilledSms) Color(0xFF86EFAC) else Color(0xFF93C5FD), RoundedCornerShape(10.dp))
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "کد ۵ رقمی تایید پیامک‌شده را وارد کنید:",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1E40AF)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "کد ۵ رقمی تایید پیامک‌شده:",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (autoFilledSms) Color(0xFF166534) else Color(0xFF1E40AF)
+                            )
+                            if (autoFilledSms) {
+                                Surface(
+                                    color = Color(0xFFDCFCE7),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, Color(0xFF86EFAC))
+                                ) {
+                                    Text(
+                                        text = "✓ پر شده خودکار از پیامک",
+                                        fontSize = 10.sp,
+                                        color = Color(0xFF166534),
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         OutlinedTextField(
                             value = otpCodeInput,
-                            onValueChange = { if (it.length <= 6) otpCodeInput = it },
+                            onValueChange = { if (it.length <= 6) otpCodeInput = SmsOtpHelper.normalizeDigits(it) },
                             placeholder = { Text("کد تایید ۵ رقمی (مثلاً 12345)") },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            trailingIcon = {
+                                if (autoFilledSms && otpCodeInput.isNotBlank()) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = "کد تایید خودکار پر شد",
+                                        tint = Color(0xFF16A34A),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
                         )
+
+                        // وضعیت سیم‌کارت و دریافت پیامک خودکار
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = if (autoFilledSms) Color(0xFFDCFCE7) else Color(0xFFF8FAFC),
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, if (autoFilledSms) Color(0xFF86EFAC) else Color(0xFFE2E8F0))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(if (autoFilledSms) "✅" else "📲", fontSize = 13.sp)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (autoFilledSms) {
+                                            "کد تایید با موفقیت از پیامک همین گوشی دریافت و خودکار ثبت شد."
+                                        } else {
+                                            "در صورت قرار داشتن سیم‌کارت روی همین گوشی، پیامک خودکار خوانده و پر می‌شود."
+                                        },
+                                        fontSize = 10.5.sp,
+                                        color = if (autoFilledSms) Color(0xFF166534) else Color(0xFF475569),
+                                        fontWeight = if (autoFilledSms) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                    if (!hasSmsPermission && !autoFilledSms) {
+                                        TextButton(
+                                            onClick = { smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS) },
+                                            contentPadding = PaddingValues(0.dp),
+                                            modifier = Modifier.height(24.dp)
+                                        ) {
+                                            Text(
+                                                text = "⚡ فعال‌سازی دریافت خودکار پیامک",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFF0284C7),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -337,7 +469,12 @@ fun AuthDialog(
                                     onClick = {
                                         if (authPhone.isNotBlank()) {
                                             otpTimerSeconds = 120
-                                            viewModel.sendOtp(authPhone) { _, msg ->
+                                            autoFilledSms = false
+                                            viewModel.sendOtp(authPhone) { _, msg, directOtp ->
+                                                if (!directOtp.isNullOrBlank()) {
+                                                    otpCodeInput = directOtp
+                                                    autoFilledSms = true
+                                                }
                                                 Toast.makeText(context, msg ?: "کد مجدداً ارسال شد", Toast.LENGTH_SHORT).show()
                                             }
                                         }
@@ -861,8 +998,20 @@ fun AuthDialog(
                                     return@Button
                                 }
                                 isForgotPasswordMode = true
+                                otpCodeInput = ""
+                                autoFilledSms = false
                                 otpTimerSeconds = 120
-                                viewModel.sendOtp(authPhone) { success, msg ->
+
+                                // اگر دسترسی دریافت پیامک داده نشده باشد، از کاربر درخواست می‌شود تا خودکار پر شود
+                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
+                                    smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
+                                }
+
+                                viewModel.sendOtp(authPhone) { success, msg, directOtp ->
+                                    if (!directOtp.isNullOrBlank()) {
+                                        otpCodeInput = directOtp
+                                        autoFilledSms = true
+                                    }
                                     Toast.makeText(context, msg ?: if (success) "کد تایید پیامک شد" else "خطا در ارسال پیامک", Toast.LENGTH_SHORT).show()
                                 }
                             },

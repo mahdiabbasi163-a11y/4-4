@@ -1,7 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,7 +22,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -27,6 +32,7 @@ import com.example.data.model.KodyarTechnician
 import com.example.data.model.KodyarUser
 import com.example.ui.AssistantViewModel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 @Composable
 fun TechniciansScreen(
@@ -571,26 +577,94 @@ fun TechniciansScreen(
             )
         }
         var selectedTimeSlot by remember { mutableStateOf(timeSlots[1]) } // Default to afternoon
+        val coroutineScope = rememberCoroutineScope()
 
         var deviceBrand by remember { mutableStateOf("") }
         var problemDesc by remember { mutableStateOf("") }
         var contactPhone by remember(currentUser) { mutableStateOf(currentUser?.phone ?: "") }
         var isSubmitting by remember { mutableStateOf(false) }
 
+        // مرحله ۱: مشخصات دستگاه و زمان | مرحله ۲: آدرس و لوکیشن
+        var formStep by remember { mutableStateOf(1) }
+        var fullAddress by remember { mutableStateOf("") }
+        var postalCode by remember { mutableStateOf("") }
+        var addressNote by remember { mutableStateOf("") }
+        var pickedLocation by remember { mutableStateOf<PickedLocation?>(null) }
+        var locationLink by remember { mutableStateOf("") }
+        var isLocating by remember { mutableStateOf(false) }
+
+        val fetchLocation = {
+            isLocating = true
+            requestCurrentLocation(context) { loc, err ->
+                isLocating = false
+                if (loc != null) {
+                    pickedLocation = loc
+                    val resAddr = loc.resolvedAddress
+                    if (!resAddr.isNullOrBlank()) {
+                        fullAddress = resAddr
+                        Toast.makeText(context, "✅ موقعیت مکانی ثبت و آدرس کامل در کادر درج گردید", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "✅ موقعیت مکانی ثبت شد", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    Toast.makeText(context, err ?: "خطا در دریافت موقعیت", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
+        val locationPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
+            if (result.values.any { it }) {
+                fetchLocation()
+            } else {
+                Toast.makeText(context, "برای ثبت لوکیشن باید دسترسی موقعیت مکانی را اجازه دهید", Toast.LENGTH_LONG).show()
+            }
+        }
+
         val chosenDay = next7Days.getOrNull(selectedDayIndex)
-        val preferredDate = chosenDay?.let { "${it.formattedLabel} - $selectedTimeSlot" } ?: ""
+        val technicianVisitTime = chosenDay?.let { "${it.formattedLabel} - $selectedTimeSlot" } ?: selectedTimeSlot
 
         AlertDialog(
             onDismissRequest = { if (!isSubmitting) selectedTechForRepair = null },
             title = {
-                Text(
-                    text = "درخواست اعزام تکنسین (${tech.name ?: "کارشناس"})",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = CodyarNavy,
-                    textAlign = TextAlign.Right,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "درخواست اعزام تکنسین (${tech.name ?: "کارشناس"})",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = CodyarNavy,
+                        textAlign = TextAlign.Right,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    // نوار پیشرفت دو مرحله‌ای
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        listOf(1 to "۱. مشخصات دستگاه", 2 to "۲. آدرس محل").forEach { (step, label) ->
+                            val active = formStep >= step
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(4.dp)
+                                        .background(
+                                            if (active) CodyarNavy else Color(0xFFE2E8F0),
+                                            RoundedCornerShape(2.dp)
+                                        )
+                                )
+                                Text(
+                                    text = label,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (formStep == step) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (active) CodyarNavy else Color(0xFF94A3B8)
+                                )
+                            }
+                        }
+                    }
+                }
             },
             text = {
                 Column(
@@ -599,6 +673,7 @@ fun TechniciansScreen(
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                 ) {
+                  if (formStep == 1) {
                     Text(
                         text = "جهت هماهنگی دقیق مراجعه تکنسین، مشخصات و تاریخ مورد نظر را انتخاب فرمایید:",
                         fontSize = 11.sp,
@@ -694,7 +769,7 @@ fun TechniciansScreen(
                         }
                     }
 
-                    // 4. Time Slot Chips
+                    // 4. بازه ساعت حضور تکنسین در منزل مشتری
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -702,7 +777,7 @@ fun TechniciansScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "⏰ بازه زمانی پیشنهادی:",
+                            text = "⏰ ساعت حضور تکنسین در منزل:",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = CodyarNavy,
@@ -739,7 +814,7 @@ fun TechniciansScreen(
                         }
                     }
 
-                    // Selected Date Preview Card
+                    // کارت پیش‌نمایش زمان حضور تکنسین در منزل
                     Surface(
                         color = Color(0xFFEFF6FF),
                         border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
@@ -753,7 +828,7 @@ fun TechniciansScreen(
                         ) {
                             Text("🗓️", fontSize = 14.sp)
                             Text(
-                                text = "زمان ثبت‌شده: $preferredDate",
+                                text = "زمان حضور تکنسین در منزل: $technicianVisitTime",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF1D4ED8)
@@ -771,13 +846,173 @@ fun TechniciansScreen(
                         singleLine = true,
                         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
                     )
+                  } else {
+                    // ===== مرحله ۲: آدرس و لوکیشن محل خرابی =====
+                    Text(
+                        text = "آدرس دقیق محل را ثبت کنید تا تکنسین برای پیدا کردن آدرس تماس نگیرد:",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        textAlign = TextAlign.Right,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // ثبت موقعیت مکانی روی نقشه
+                    Surface(
+                        color = if (pickedLocation != null) Color(0xFFF0FDF4) else Color(0xFFF8FAFC),
+                        border = BorderStroke(1.dp, if (pickedLocation != null) Color(0xFF86EFAC) else Color(0xFFE2E8F0)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    if (hasLocationPermission(context)) {
+                                        fetchLocation()
+                                    } else {
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    }
+                                },
+                                enabled = !isLocating,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (pickedLocation != null) Color(0xFF16A34A) else CodyarNavy
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isLocating) {
+                                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                        Text(
+                                            text = if (pickedLocation != null) "✅ لوکیشن ثبت شد (برای تغییر بزنید)" else "ثبت موقعیت فعلی من روی نقشه",
+                                            fontSize = 12.sp,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+
+                            pickedLocation?.let { loc ->
+                                Text(
+                                    text = "📍 مختصات: ${loc.shortLabel}" +
+                                            (loc.accuracyMeters?.let { " (دقت حدود ${it.toInt()} متر)" } ?: ""),
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF15803D),
+                                    textAlign = TextAlign.Right,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            // اگر مشتری جای دیگری است (مثلاً سرکار) و برای منزل سفارش می‌دهد
+                            OutlinedTextField(
+                                value = locationLink,
+                                onValueChange = { input ->
+                                    locationLink = input
+                                    parseLocationFromLink(input)?.let { parsed ->
+                                        pickedLocation = parsed
+                                        Toast.makeText(context, "✅ لوکیشن از لینک خوانده شد", Toast.LENGTH_SHORT).show()
+                                        coroutineScope.launch {
+                                            val addr = fetchAddressFromCoordinates(context, parsed.latitude, parsed.longitude)
+                                            if (!addr.isNullOrBlank()) {
+                                                fullAddress = addr
+                                                pickedLocation = parsed.copy(resolvedAddress = addr)
+                                                Toast.makeText(context, "✅ آدرس دقیق در کادر آدرس درج شد", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                label = { Text("یا لینک نقشه محل را پیست کنید", fontSize = 11.sp) },
+                                placeholder = { Text("مخصوص وقتی خودتان در محل نیستید", fontSize = 10.sp) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                singleLine = true,
+                                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+                            )
+                        }
+                    }
+
+                    // آدرس پستی کامل
+                    OutlinedTextField(
+                        value = fullAddress,
+                        onValueChange = { fullAddress = it },
+                        label = { Text("آدرس کامل پستی (خیابان، کوچه، پلاک، واحد)", fontSize = 11.sp) },
+                        placeholder = { Text("مثلاً: اراک، خیابان شریعتی، کوچه ۱2، پلاک ۵، طبقه ۲", fontSize = 10.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        minLines = 2,
+                        maxLines = 3,
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                    )
+
+                    // کد پستی
+                    val normalizedPostal = normalizePersianDigits(postalCode).filter { it.isDigit() }
+                    OutlinedTextField(
+                        value = postalCode,
+                        onValueChange = { input ->
+                            val digits = normalizePersianDigits(input).filter { it.isDigit() }
+                            if (digits.length <= 10) postalCode = digits
+                        },
+                        label = { Text("کد پستی ۱۰ رقمی", fontSize = 11.sp) },
+                        placeholder = { Text("مثلاً: 3819764521", fontSize = 11.sp) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        isError = normalizedPostal.isNotEmpty() && normalizedPostal.length != 10,
+                        supportingText = {
+                            if (normalizedPostal.isNotEmpty() && normalizedPostal.length != 10) {
+                                Text("کد پستی باید دقیقاً ۱۰ رقم باشد", fontSize = 10.sp, color = Color(0xFFDC2626))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                    )
+
+                    // نشانه و توضیح مسیر
+                    OutlinedTextField(
+                        value = addressNote,
+                        onValueChange = { addressNote = it },
+                        label = { Text("نشانه و توضیح مسیر (اختیاری)", fontSize = 11.sp) },
+                        placeholder = { Text("مثلاً: روبروی بانک ملی، درب قهوه‌ای، زنگ دوم", fontSize = 10.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        maxLines = 2,
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
+                    )
+                  }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (deviceBrand.isBlank() || problemDesc.isBlank() || contactPhone.isBlank()) {
-                            Toast.makeText(context, "لطفاً نوع دستگاه، شرح مشکل و شماره تماس را تکمیل فرمایید", Toast.LENGTH_SHORT).show()
+                        if (formStep == 1) {
+                            if (deviceBrand.isBlank() || problemDesc.isBlank() || contactPhone.isBlank()) {
+                                Toast.makeText(context, "لطفاً نوع دستگاه، شرح مشکل و شماره تماس را تکمیل فرمایید", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            formStep = 2
+                            return@Button
+                        }
+
+                        val cleanPostal = normalizePersianDigits(postalCode).filter { it.isDigit() }
+                        if (fullAddress.isBlank() && pickedLocation == null) {
+                            Toast.makeText(context, "لطفاً آدرس کامل را بنویسید یا موقعیت فعلی را ثبت کنید", Toast.LENGTH_LONG).show()
+                            return@Button
+                        }
+                        if (cleanPostal.isNotEmpty() && cleanPostal.length != 10) {
+                            Toast.makeText(context, "کد پستی باید دقیقاً ۱۰ رقم باشد", Toast.LENGTH_SHORT).show()
                             return@Button
                         }
                         isSubmitting = true
@@ -787,22 +1022,57 @@ fun TechniciansScreen(
                             ?: tech.city?.takeIf { it.isNotBlank() }
                             ?: "اراک"
 
-                        val formattedDesc = "دستگاه و برند: $deviceBrand\n" +
-                                "شرح خرابی: $problemDesc\n" +
-                                "زمان پیشنهادی مراجعه کارشناس: $preferredDate"
+                        val loc = pickedLocation
+                        val composedAddress = listOfNotNull(
+                            fullAddress.trim().takeIf { it.isNotBlank() },
+                            addressNote.trim().takeIf { it.isNotBlank() }?.let { "نشانه: $it" },
+                            cleanPostal.takeIf { it.length == 10 }?.let { "کد پستی: $it" }
+                        ).joinToString(" - ")
+
+                        val pureProblemDesc = problemDesc.trim()
+                        val devBrandClean = deviceBrand.trim().ifBlank { "عمومی" }
+
+                        // استخراج ساعت دقیق از زمان گوشی جهت جلوگیری از هرگونه اختلاف زمان بین مشتری و تکنسین
+                        val nowCal = java.util.Calendar.getInstance()
+                        val phoneHour = nowCal.get(java.util.Calendar.HOUR_OF_DAY)
+                        val phoneMinute = nowCal.get(java.util.Calendar.MINUTE)
+                        val phoneTimeFormatted = String.format(java.util.Locale.US, "%02d:%02d", phoneHour, phoneMinute)
+
+                        val todayJalali = calculateNext7JalaliDays().firstOrNull()
+                        val todayShamsi = if (todayJalali != null) "${todayJalali.dayOfWeekName} ${todayJalali.dayOfMonth} ${todayJalali.monthName}" else ""
+
+                        val scheduledDatePayload = "$technicianVisitTime (ثبت سفارش: ساعت $phoneTimeFormatted)"
+
+                        val problemWithTimestamp = buildString {
+                            if (pureProblemDesc.isNotBlank()) {
+                                append(pureProblemDesc)
+                                append("\n")
+                            }
+                            append("زمان حضور تکنسین در منزل: $technicianVisitTime\n")
+                            append("[ساعت ثبت سفارش توسط مشتری از زمان گوشی: $phoneTimeFormatted ($todayShamsi)]")
+                        }
 
                         viewModel.submitRepairRequest(
                             techId = tech.id ?: "",
-                            description = formattedDesc,
+                            description = problemWithTimestamp,
                             city = repairCity,
-                            customerPhone = contactPhone
+                            appliance = devBrandClean,
+                            brand = devBrandClean,
+                            customerPhone = contactPhone,
+                            address = composedAddress.takeIf { it.isNotBlank() },
+                            postalCode = cleanPostal.takeIf { it.length == 10 },
+                            latitude = loc?.latitude,
+                            longitude = loc?.longitude,
+                            locationUrl = loc?.mapsUrl,
+                            addressNote = addressNote.trim().takeIf { it.isNotBlank() },
+                            scheduledDate = scheduledDatePayload
                         ) { success, err ->
                             isSubmitting = false
                             if (success) {
                                 selectedTechForRepair = null
                                 Toast.makeText(
                                     context,
-                                    "✅ درخواست اعزام با موفقیت ثبت شد. تکنسین در تاریخ انتخابی با شما تماس می‌گیرد.",
+                                    "✅ درخواست اعزام در ساعت $phoneTimeFormatted با موفقیت ثبت شد.",
                                     Toast.LENGTH_LONG
                                 ).show()
                             } else {
@@ -817,16 +1087,27 @@ fun TechniciansScreen(
                     if (isSubmitting) {
                         CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
                     } else {
-                        Text("ثبت نهایی درخواست", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(
+                            text = if (formStep == 1) "مرحله بعد: ثبت آدرس" else "ثبت نهایی درخواست",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
                     }
                 }
             },
             dismissButton = {
                 TextButton(
-                    onClick = { selectedTechForRepair = null },
+                    onClick = {
+                        if (formStep == 2) formStep = 1 else selectedTechForRepair = null
+                    },
                     enabled = !isSubmitting
                 ) {
-                    Text("انصراف", color = Color.Gray, fontSize = 12.sp)
+                    Text(
+                        text = if (formStep == 2) "بازگشت" else "انصراف",
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
                 }
             }
         )

@@ -480,126 +480,6 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // --- SECTION: Category recommendations matching user screenshot ---
-        Text(
-            text = "دسته‌بندی‌های پیشنهادی همکاران",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = CodyarTextPrimary,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-        )
-
-        val categoryColors = listOf(
-            Color(0xFF0EA5E9), // Sky Blue
-            Color(0xFF8B5CF6), // Purple
-            Color(0xFFF97316), // Orange
-            Color(0xFF10B981), // Emerald Green
-            Color(0xFFEF4444), // Rose Red
-            Color(0xFF06B6D4)  // Cyan
-        )
-
-        val recommendingTechsMap = remember(liveTechs, displayCategories) {
-            displayCategories.associateWith { cat ->
-                val matchingTechs = liveTechs.filter { it.resolvedCategories.any { specialty -> specialty.contains(cat, ignoreCase = true) || cat.contains(specialty, ignoreCase = true) } }
-                matchingTechs.maxByOrNull { tech ->
-                    val orders = tech.completedOrders ?: 0
-                    val rating = tech.rating ?: 0.0
-                    val satisfaction = tech.satisfactionRate ?: 0
-                    (orders * 100) + (rating * 50).toInt() + satisfaction
-                }
-            }
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            displayCategories.forEachIndexed { index, cat ->
-                val cardColor = categoryColors[index % categoryColors.size]
-                val recommendingTech = recommendingTechsMap[cat]
-                
-                val techName = recommendingTech?.name ?: "تکنسین کدیار"
-                val avatarUrl = recommendingTech?.resolvedAvatarUrl
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(110.dp)
-                        .clickable {
-                            viewModel.updateSearchFilters("", "همه", cat)
-                            onNavigateToSearch()
-                        },
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = cardColor)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Technician image on left
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (avatarUrl != null) {
-                                AsyncImage(
-                                    model = avatarUrl,
-                                    contentDescription = techName,
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(bottomStart = 18.dp, topStart = 18.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(Color.White.copy(alpha = 0.15f)),
-                                        contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Person,
-                                        contentDescription = techName,
-                                        tint = Color.White.copy(alpha = 0.6f),
-                                        modifier = Modifier.size(36.dp)
-                                    )
-                                }
-                            }
-                        }
-                        // Text details on right
-                        Column(
-                            modifier = Modifier
-                                .weight(1.8f)
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.Start
-                        ) {
-                            Text(
-                                text = "بانک ارور $cat",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "+ $techName پیشنهاد می‌کند",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color.White.copy(alpha = 0.9f)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
         // --- SECTION: Engaging Share App Banner ---
         Card(
             modifier = Modifier
@@ -736,13 +616,6 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(7.dp)
         ) {
             topErrors.forEach { err ->
-                val severityLevel = err.hazardLevel ?: "medium"
-                val (color, bg, label) = when (severityLevel) {
-                    "high" -> Triple(Color(0xFFC0392B), Color(0xFFFDF0EE), "خطرناک")
-                    "low" -> Triple(Color(0xFF1E8449), Color(0xFFEAFAF1), "کم‌خطر")
-                    else -> Triple(Color(0xFFD68910), Color(0xFFFEF9E7), "متوسط")
-                }
-
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -754,51 +627,76 @@ fun HomeScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(12.dp),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(11.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        // Dynamic code badge with ample space for long codes like 40 60 80
                         Box(
                             modifier = Modifier
-                                .size(42.dp)
-                                .background(Color(0xFFF0F2F5), RoundedCornerShape(9.dp)),
+                                .defaultMinSize(minWidth = 56.dp)
+                                .background(Color(0xFFEFF6FF), RoundedCornerShape(8.dp))
+                                .border(BorderStroke(1.dp, Color(0xFFBFDBFE)), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = err.code ?: "",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = CodyarTextPrimary
+                                text = err.resolvedCode,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = CodyarNavy
                             )
                         }
 
                         Column(modifier = Modifier.weight(1f)) {
+                            // Category & Brand
+                            val categoryBrand = listOfNotNull(
+                                err.resolvedCategory.takeIf { it.isNotBlank() },
+                                err.brand?.takeIf { it.isNotBlank() }
+                            ).joinToString(" ")
                             Text(
-                                text = err.title ?: err.code ?: "",
+                                text = if (categoryBrand.isNotBlank()) categoryBrand else "دستگاه عمومی",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = CodyarTextPrimary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            // Model
+                            val modelStr = err.model?.takeIf { it.isNotBlank() } ?: "عمومی"
                             Text(
-                                text = err.deviceBrandModelSummary,
+                                text = "مدل: $modelStr",
                                 fontSize = 11.sp,
-                                color = CodyarTextSecondary
+                                color = CodyarTextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
+                        // Lock / Premium badge
                         Box(
                             modifier = Modifier
-                                .background(bg, RoundedCornerShape(5.dp))
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                                .background(Color(0xFFFEF9E7), RoundedCornerShape(6.dp))
+                                .border(BorderStroke(0.8.dp, Color(0xFFF9E79F)), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Text(
-                                text = label,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = color
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = Color(0xFFD68910),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = "عیب‌یابی",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFB7791F)
+                                )
+                            }
                         }
                     }
                 }

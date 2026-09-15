@@ -311,37 +311,6 @@ fun AssistantScreen(
                                     }
                                 }
 
-                                // Refresh Button
-                                IconButton(
-                                    onClick = {
-                                        if (!isGlobalRefreshing) {
-                                            viewModel.refreshAllAppData { success ->
-                                                if (success) {
-                                                    Toast.makeText(context, "اطلاعات با موفقیت به‌روزرسانی شد", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                                        .size(36.dp)
-                                ) {
-                                    if (isGlobalRefreshing) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(16.dp),
-                                            strokeWidth = 2.dp,
-                                            color = Color.White
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.Refresh,
-                                            contentDescription = "به‌روزرسانی اطلاعات",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                    }
-                                }
-
                                 // Cart Button
                                 Box {
                                     IconButton(
@@ -572,19 +541,8 @@ fun AssistantScreen(
                                     onNavigateToStore = { activeTab = "store" },
                                     onShowPlans = { showPlansDialog = true },
                                     onOpenErrorCode = { err ->
-                                        if (currentUser == null) {
-                                            showRegisterRequiredDialog = true
-                                        } else {
-                                            val viewedSet = viewModel.getUniqueErrorCodesViewed()
-                                            val codeKey = "${err.brand}_${err.category}_${err.code}"
-                                            if (isPremium || viewedSet.contains(codeKey) || viewedSet.size < 2) {
-                                                viewModel.recordErrorCodeView(codeKey)
-                                                selectedErrorDetail = err
-                                                activeTab = "search"
-                                            } else {
-                                                showPremiumRequiredDialog = true
-                                            }
-                                        }
+                                        selectedErrorDetail = err
+                                        activeTab = "search"
                                     }
                                 )
                             }
@@ -605,18 +563,7 @@ fun AssistantScreen(
                                     viewModel = viewModel,
                                     selectedErrorDetail = selectedErrorDetail,
                                     onSelectError = { err ->
-                                        if (currentUser == null) {
-                                            showRegisterRequiredDialog = true
-                                        } else {
-                                            val viewedSet = viewModel.getUniqueErrorCodesViewed()
-                                            val codeKey = "${err.brand}_${err.category}_${err.code}"
-                                            if (isPremium || viewedSet.contains(codeKey) || viewedSet.size < 2) {
-                                                viewModel.recordErrorCodeView(codeKey)
-                                                selectedErrorDetail = err
-                                            } else {
-                                                showPremiumRequiredDialog = true
-                                            }
-                                        }
+                                        selectedErrorDetail = err
                                     },
                                     onBack = { selectedErrorDetail = null },
                                     onNavigateToTechnicians = { activeTab = "technicians" },

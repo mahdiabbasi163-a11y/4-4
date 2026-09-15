@@ -274,17 +274,17 @@ fun SearchScreen(
                                 color = CodyarTextPrimary,
                                 modifier = Modifier.padding(bottom = 4.dp)
                             )
-                            
+
                             val availableModels = remember(selectedBrand, selectedCategory, liveErrorCodes) {
                                 viewModel.getAvailableModelsFor(selectedBrand, selectedCategory)
                             }
-                            
+
                             var modelExpanded by remember { mutableStateOf(false) }
-                            
+
                             Box(modifier = Modifier.fillMaxWidth()) {
                                 OutlinedTextField(
                                     value = modelQuery,
-                                    onValueChange = { 
+                                    onValueChange = {
                                         viewModel.updateSearchFilters(searchQuery, selectedBrand, selectedCategory, it)
                                     },
                                     placeholder = { Text("مثلاً: ۲۴۰۰، v12، دایرکت درایو...", fontSize = 11.sp) },
@@ -316,18 +316,18 @@ fun SearchScreen(
                                         unfocusedContainerColor = Color(0xFFF8FAFC)
                                     )
                                 )
-                                
+
                                 val filteredModels = remember(availableModels, modelQuery) {
                                     if (modelQuery.isEmpty() || modelQuery == "همه") {
                                         availableModels
                                     } else {
                                         val normQuery = viewModel.canonicalModel(modelQuery)
-                                        availableModels.filter { 
+                                        availableModels.filter {
                                             it == "همه" || viewModel.canonicalModel(it).contains(normQuery, ignoreCase = true)
                                         }
                                     }
                                 }
-                                
+
                                 if (filteredModels.isNotEmpty() && modelExpanded) {
                                     DropdownMenu(
                                         expanded = modelExpanded,
@@ -393,12 +393,18 @@ fun SearchScreen(
                     val md = err.model?.trim()?.takeIf { it.isNotBlank() }
                     val brandCatText = if (br != null) "$devCat · $br" else devCat
 
+                    // کد خطا — کدهای طولانی مثل «40 60 80» یا «CR CF» دو خطی می‌شوند
+                    val codeText = err.resolvedCode
+                    val codeFontSize = when {
+                        codeText.length > 9 -> 11.sp
+                        codeText.length > 5 -> 12.sp
+                        else -> 14.sp
+                    }
+
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                onSelectError(err)
-                            },
+                            .clickable { onSelectError(err) },
                         colors = CardDefaults.cardColors(containerColor = CodyarSurface),
                         shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.dp, Color(0xFFEAECEF))
@@ -410,25 +416,30 @@ fun SearchScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            // Jadar and wide error code box (fits long codes like "40 60 80", "CR CF")
+                            // جعبه کد خطا — عرض کافی برای کدهای طولانی
                             Box(
                                 modifier = Modifier
-                                    .defaultMinSize(minWidth = 60.dp, minHeight = 44.dp)
+                                    .defaultMinSize(minWidth = 64.dp, minHeight = 46.dp)
+                                    .widthIn(max = 108.dp)
                                     .background(Color(0xFFF0F4F8), RoundedCornerShape(10.dp))
                                     .border(1.dp, Color(0xFFD9E2EC), RoundedCornerShape(10.dp))
                                     .padding(horizontal = 10.dp, vertical = 8.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = err.resolvedCode,
-                                    fontSize = 13.sp,
+                                    text = codeText,
+                                    fontSize = codeFontSize,
                                     fontWeight = FontWeight.Bold,
                                     color = CodyarNavy,
-                                    textAlign = TextAlign.Center
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    lineHeight = 15.sp
                                 )
                             }
 
-                            // Device info (category, brand, model) - NO error title/causes shown to protect subscription!
+                            // فقط شناسه دستگاه — هرگز title/description/causes/steps/
+                            // precautions/hazardLevel در این لیست نمایش داده نمی‌شود
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = brandCatText,
@@ -439,55 +450,33 @@ fun SearchScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
 
-                                if (md != null) {
-                                    Text(
-                                        text = "مدل: $md",
-                                        fontSize = 11.sp,
-                                        color = CodyarTextSecondary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(top = 1.dp)
-                                    )
-                                }
+                                Text(
+                                    text = "مدل: ${md ?: "عمومی"}",
+                                    fontSize = 11.sp,
+                                    color = CodyarTextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(top = 1.dp)
+                                )
 
-                                if (isPremium) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                        modifier = Modifier.padding(top = 3.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.CheckCircle,
-                                            contentDescription = null,
-                                            tint = Color(0xFF1E8449),
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                        Text(
-                                            text = "مشاهده راهنمای کامل عیب‌یابی",
-                                            fontSize = 10.sp,
-                                            color = Color(0xFF1E8449),
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                } else {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                        modifier = Modifier.padding(top = 3.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Lock,
-                                            contentDescription = null,
-                                            tint = Color(0xFFD97706),
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                        Text(
-                                            text = "علت و رفع عیب (نیازمند اشتراک)",
-                                            fontSize = 10.sp,
-                                            color = Color(0xFFD97706),
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                    modifier = Modifier.padding(top = 3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isPremium) Icons.Default.CheckCircle else Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = if (isPremium) Color(0xFF1E8449) else Color(0xFFD97706),
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                    Text(
+                                        text = if (isPremium) "مشاهده راهنمای کامل عیب‌یابی"
+                                               else "علت و رفع عیب (نیازمند اشتراک)",
+                                        fontSize = 10.sp,
+                                        color = if (isPremium) Color(0xFF1E8449) else Color(0xFFD97706),
+                                        fontWeight = FontWeight.Medium
+                                    )
                                 }
                             }
 
@@ -606,16 +595,22 @@ fun SearchScreen(
                             Box(
                                 modifier = Modifier
                                     .defaultMinSize(minWidth = 56.dp, minHeight = 48.dp)
+                                    .widthIn(max = 110.dp)
                                     .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
                                     .padding(horizontal = 10.dp, vertical = 6.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = err.resolvedCode,
-                                    fontSize = 15.sp,
+                                    fontSize = if (err.resolvedCode.length > 9) 12.sp
+                                               else if (err.resolvedCode.length > 5) 13.sp
+                                               else 15.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
-                                    textAlign = TextAlign.Center
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    lineHeight = 16.sp
                                 )
                             }
 
@@ -732,7 +727,7 @@ fun SearchScreen(
                             }
                         } else {
                             // Premium full diagnosis: Pattern (code, category, brand, model, title, description, causes, steps, precautions, hazardLevel)
-                            
+
                             // 5. Title
                             if (!err.title.isNullOrBlank()) {
                                 Column {

@@ -124,22 +124,59 @@ fun ProblemsScreen(
                             }
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = prob.title ?: "",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = CodyarTextPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${prob.brand ?: ""} ${if (!prob.category.isNullOrBlank()) "· ${prob.category}" else ""}",
-                                    fontSize = 12.sp,
-                                    color = CodyarTextSecondary
-                                )
+                                if (isPremium) {
+                                    Text(
+                                        text = prob.title ?: "",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = CodyarTextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${prob.brand ?: ""} ${if (!prob.category.isNullOrBlank()) "· ${prob.category}" else ""}",
+                                        fontSize = 12.sp,
+                                        color = CodyarTextSecondary
+                                    )
+                                } else {
+                                    // Non-premium: show only device category/brand — hide the diagnostic title
+                                    Text(
+                                        text = listOfNotNull(
+                                            prob.category?.trim()?.takeIf { it.isNotBlank() },
+                                            prob.brand?.trim()?.takeIf { it.isNotBlank() }
+                                        ).joinToString(" · ").ifBlank { "دستگاه عمومی" },
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = CodyarTextPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = Color(0xFFD97706),
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text = "شرح مشکل (نیازمند اشتراک)",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFFD97706),
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
                             }
 
-                            Icon(Icons.Default.KeyboardArrowLeft, contentDescription = null, tint = CodyarTextSecondary)
+                            Icon(
+                                imageVector = if (isPremium) Icons.Default.KeyboardArrowLeft else Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = if (isPremium) CodyarTextSecondary else Color(0xFFD97706)
+                            )
                         }
                     }
                 }

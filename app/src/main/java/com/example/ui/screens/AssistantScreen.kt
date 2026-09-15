@@ -812,6 +812,7 @@ fun AssistantScreen(
             // --- LIVE WEBSITE UPDATE NOTIFICATION DIALOG ---
             UpdateNotificationDialog(
                 updates = appUpdateNotification,
+                isPremium = isPremium,
                 onDismiss = { viewModel.dismissUpdateNotification() }
             )
 

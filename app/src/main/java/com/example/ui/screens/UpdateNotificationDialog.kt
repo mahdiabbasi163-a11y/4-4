@@ -22,6 +22,7 @@ import com.example.ui.AppUpdateNotification
 @Composable
 fun UpdateNotificationDialog(
     updates: AppUpdateNotification?,
+    isPremium: Boolean = false,
     onDismiss: () -> Unit
 ) {
     if (updates == null) return
@@ -88,12 +89,12 @@ fun UpdateNotificationDialog(
                             ) {
                                 Column(modifier = Modifier.padding(10.dp)) {
                                     Text(
-                                        text = "کد ${error.code ?: ""} (${error.brand ?: ""})",
+                                        text = "کد ${error.code ?: ""} — ${error.resolvedCategory}${if (!error.brand.isNullOrBlank()) " · ${error.brand}" else ""}",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp,
                                         color = Color(0xFF14532D)
                                     )
-                                    if (!error.title.isNullOrBlank()) {
+                                    if (isPremium && !error.title.isNullOrBlank()) {
                                         Text(
                                             text = error.title,
                                             fontSize = 11.sp,
@@ -126,12 +127,12 @@ fun UpdateNotificationDialog(
                             ) {
                                 Column(modifier = Modifier.padding(10.dp)) {
                                     Text(
-                                        text = prob.title ?: "",
+                                        text = if (isPremium) (prob.title ?: "") else "دستگاه: ${prob.brand ?: ""} - ${prob.category ?: ""}",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp,
                                         color = Color(0xFF78350F)
                                     )
-                                    if (!prob.brand.isNullOrBlank() || !prob.category.isNullOrBlank()) {
+                                    if (isPremium && (!prob.brand.isNullOrBlank() || !prob.category.isNullOrBlank())) {
                                         Text(
                                             text = "دستگاه: ${prob.brand ?: ""} - ${prob.category ?: ""}",
                                             fontSize = 10.sp,

@@ -631,20 +631,24 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Dynamic code badge with ample space for long codes like 40 60 80
+                        // Dynamic code badge with ample space for long codes like "40 60 80" or "CR CF"
                         Box(
                             modifier = Modifier
-                                .defaultMinSize(minWidth = 56.dp)
+                                .defaultMinSize(minWidth = 56.dp, minHeight = 40.dp)
+                                .widthIn(max = 92.dp)
                                 .background(Color(0xFFEFF6FF), RoundedCornerShape(8.dp))
                                 .border(BorderStroke(1.dp, Color(0xFFBFDBFE)), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = err.resolvedCode,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = CodyarNavy
+                                color = CodyarNavy,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
